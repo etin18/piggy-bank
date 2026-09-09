@@ -1,0 +1,2154 @@
+/* ==========================================================================
+   存錢筒 — 應用程式邏輯
+
+   資料流：本機是操作的即時真相，Google 試算表是同步目標。
+   每筆變更先寫進本機（畫面立刻更新），再排隊送上試算表；
+   沒網路時就留在佇列裡，等有網路自動補送。
+
+   金額一律台幣。ETF 是台股，基金是台幣計價（計價幣別 TWD、匯率 1），
+   所以整個 App 沒有任何匯率換算。
+   ========================================================================== */
+
+'use strict';
+
+/* ---------- 常數 ---------- */
+
+const LS = {
+  apiUrl: 'pb.apiUrl',
+  secret: 'pb.secret',
+  lastSync: 'pb.lastSync',
+  theme: 'pb.theme',
+  data: 'pb.',            // pb.instruments、pb.trades …
+};
+
+/** 五張表的名字，同步與本機儲存都照這個順序跑 */
+const ENTITIES = ['instruments', 'trades', 'dividends', 'cashflows', 'prices'];
+
+/** 期初持有的日期特殊值。排序時當成最早，年度統計時整筆略過 */
+const PRE = 'PRE2025';
+const PRE_LABEL = '2025 之前';
+
+const ETF = 'ETF';
+const FUND = '基金';
+
+const BUY = '買進';
+const SELL = '賣出';
+
+const ACCOUNT_OF = { [ETF]: '券商', [FUND]: '基金' };
+
+const MONTH_LABELS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
+
+/* ---------- 狀態 ---------- */
+
+const state = {
+  instruments: [],
+  trades: [],
+  dividends: [],
+  cashflows: [],
+  prices: [],
+
+  apiUrl: '',
+  secret: '',
+  lastSync: null,
+  syncing: false,
+  lastError: null,
+
+  theme: 'light',
+  page: 'record',
+  category: null,        // 記錄頁選中的 ETF / 基金
+  reportYear: null,
+  showClosed: false,     // 持股頁的「已出清」是否展開
+
+  editing: null,         // { entity, id } 正在編輯的紀錄
+  draft: {},             // 表單暫存：category、action、unit、style…
+};
+
+/* ==========================================================================
+   小工具
+   ========================================================================== */
+
+const $ = (id) => document.getElementById(id);
+
+function todayStr() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function thisYear() {
+  return new Date().getFullYear();
+}
+
+/** 日期字串的排序鍵。期初排在所有日期之前 */
+function sortKey(date) {
+  return date === PRE ? '0000-00-00' : String(date || '');
+}
+
+/** 'YYYY-MM-DD' → 年份數字；期初或空值回 null */
+function yearOf(date) {
+  if (!date || date === PRE) return null;
+  const y = Number(String(date).slice(0, 4));
+  return y || null;
+}
+
+function monthOf(date) {
+  if (!date || date === PRE) return null;
+  const m = Number(String(date).slice(5, 7));
+  return m || null;
+}
+
+/** 今年省略年份，期初顯示「2025 之前」 */
+function fmtDate(date) {
+  if (!date) return '';
+  if (date === PRE) return PRE_LABEL;
+  const y = Number(date.slice(0, 4));
+  const m = Number(date.slice(5, 7));
+  const d = Number(date.slice(8, 10));
+  if (!y || !m || !d) return date;
+  return y === thisYear() ? `${m}/${d}` : `${y}/${m}/${d}`;
+}
+
+/** 使用者可能連逗號一起貼上來，也可能留空 */
+function parseNum(value) {
+  if (value === null || value === undefined) return 0;
+  const n = Number(String(value).replace(/[,\s$]/g, ''));
+  return isFinite(n) ? n : 0;
+}
+
+function fmtMoney(n, { sign = false } = {}) {
+  const v = Math.round(Number(n) || 0);
+  const text = '$' + Math.abs(v).toLocaleString('en-US');
+  if (v < 0) return '−' + text;
+  return sign && v > 0 ? '+' + text : text;
+}
+
+/** 圖表上的小標籤，位數太多會擠成一團，所以上萬就縮寫 */
+function fmtShort(n) {
+  const v = Math.round(Number(n) || 0);
+  if (!v) return '';
+  if (Math.abs(v) >= 10000) {
+    const w = v / 10000;
+    return (Math.abs(w) >= 10 ? Math.round(w) : w.toFixed(1).replace(/\.0$/, '')) + '萬';
+  }
+  return v.toLocaleString('en-US');
+}
+
+/** 小數位數不固定：淨值 42.85、每單位配息 0.0855，都要保留原樣 */
+function fmtNum(n, max = 4) {
+  const v = Number(n) || 0;
+  return v.toLocaleString('en-US', { maximumFractionDigits: max });
+}
+
+/** ETF 整張顯示「3 張」，畸零股顯示股數；基金一律單位數 */
+function fmtQty(type, qty) {
+  const v = Number(qty) || 0;
+  if (type === FUND) return fmtNum(v, 4) + ' 單位';
+  if (v >= 1000 && v % 1000 === 0) return fmtNum(v / 1000, 2) + ' 張';
+  return fmtNum(v, 0) + ' 股';
+}
+
+/** ISO 時間戳 → 「9/9 09:05」，給「上次更新」用 */
+function fmtStamp(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+function escapeHtml(str) {
+  return String(str === null || str === undefined ? '' : str).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+let toastTimer = null;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.hidden = false;
+  requestAnimationFrame(() => el.classList.add('is-open'));
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    el.classList.remove('is-open');
+    setTimeout(() => { el.hidden = true; }, 220);
+  }, 2400);
+}
+
+/* ==========================================================================
+   本機儲存
+   ========================================================================== */
+
+function loadLocal() {
+  try {
+    state.apiUrl = localStorage.getItem(LS.apiUrl) || '';
+    state.secret = localStorage.getItem(LS.secret) || '';
+    state.lastSync = localStorage.getItem(LS.lastSync) || null;
+    state.theme = localStorage.getItem(LS.theme) || 'light';
+    for (const entity of ENTITIES) {
+      state[entity] = JSON.parse(localStorage.getItem(LS.data + entity) || '[]');
+    }
+  } catch (err) {
+    console.warn('讀取本機資料失敗', err);
+  }
+}
+
+function saveLocal() {
+  try {
+    for (const entity of ENTITIES) {
+      localStorage.setItem(LS.data + entity, JSON.stringify(state[entity]));
+    }
+    if (state.lastSync) localStorage.setItem(LS.lastSync, state.lastSync);
+  } catch (err) {
+    toast('本機儲存空間不足');
+  }
+}
+
+/* ==========================================================================
+   API（Google Apps Script）
+   ========================================================================== */
+
+/**
+ * 所有讀寫都走 POST，密語放在 body 裡（不放網址，免得出現在伺服器日誌）。
+ * Content-Type 用 text/plain 讓瀏覽器當成「簡單請求」，
+ * 才不會發出 Apps Script 無法回應的 OPTIONS 預檢。
+ */
+async function apiCall(payload) {
+  const res = await fetch(state.apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ ...payload, secret: state.secret || '' }),
+    redirect: 'follow',
+  });
+  if (!res.ok) throw new Error(`連線失敗（${res.status}）`);
+  const data = await res.json();
+  if (!data.ok) {
+    const err = new Error(data.error || '伺服器回報錯誤');
+    if (data.authError) err.authError = true; // 密語錯誤，讓上層特別提示
+    throw err;
+  }
+  return data;
+}
+
+/* ==========================================================================
+   同步
+   ========================================================================== */
+
+function setSyncStatus(kind, text) {
+  const chip = $('sync-chip');
+  chip.className = 'sync-chip' + (kind ? ` is-${kind}` : '');
+  $('sync-text').textContent = text;
+}
+
+function pendingCount() {
+  return ENTITIES.reduce((sum, e) => sum + state[e].filter((r) => r._op).length, 0);
+}
+
+function refreshSyncChip() {
+  const n = pendingCount();
+  if (!state.apiUrl) return setSyncStatus('', '尚未設定');
+  if (state.syncing) return setSyncStatus('busy', '同步中');
+  if (n > 0) return setSyncStatus('wait', `${n} 筆待同步`);
+  if (!navigator.onLine) return setSyncStatus('', '離線');
+  return setSyncStatus('ok', '已同步');
+}
+
+/** 送上試算表的欄位，去掉 _op、_synced 這些只有本機用得到的標記 */
+function payloadOf(record) {
+  const out = {};
+  for (const key of Object.keys(record)) {
+    if (key.startsWith('_')) continue;
+    out[key] = record[key];
+  }
+  return out;
+}
+
+/**
+ * 先把本機佇列推上去，再拉回完整清單。
+ * 推送失敗的項目保留 _op 標記，下次同步再試。
+ */
+async function sync({ silent = true } = {}) {
+  if (!state.apiUrl) {
+    refreshSyncChip();
+    if (!silent) toast('請先到設定填入試算表網址');
+    return false;
+  }
+  if (state.syncing) return false;
+  if (!navigator.onLine) {
+    refreshSyncChip();
+    if (!silent) toast('目前離線，紀錄會先存在手機裡');
+    return false;
+  }
+
+  state.syncing = true;
+  refreshSyncChip();
+
+  let hadError = null;
+
+  try {
+    for (const entity of ENTITIES) {
+      for (const record of state[entity].filter((r) => r._op)) {
+        try {
+          if (record._op === 'delete') {
+            // 只在伺服器上真的存在過才需要送刪除
+            if (record._synced) await apiCall({ action: 'remove', entity, id: record.id });
+            state[entity] = state[entity].filter((r) => r.id !== record.id);
+          } else {
+            await apiCall({ action: 'save', entity, record: payloadOf(record) });
+            delete record._op;
+            record._synced = true;
+          }
+        } catch (err) {
+          if (/找不到這筆/.test(err.message)) {
+            // 伺服器端已經沒有了：要刪的就當作刪成功，要改的改成新增補回去
+            if (record._op === 'delete') {
+              state[entity] = state[entity].filter((r) => r.id !== record.id);
+            } else {
+              record._op = 'create';
+            }
+          } else {
+            hadError = err;
+          }
+        }
+      }
+    }
+
+    // 拉回伺服器版本，疊上仍未同步的本機變更
+    const data = await apiCall({ action: 'list' });
+    for (const entity of ENTITIES) {
+      state[entity] = mergeById(data[entity] || [], state[entity]);
+    }
+    state.lastSync = new Date().toISOString();
+    saveLocal();
+  } catch (err) {
+    hadError = err;
+  } finally {
+    state.syncing = false;
+  }
+
+  render();
+  refreshSyncChip();
+  state.lastError = hadError || null;
+
+  if (hadError) {
+    setSyncStatus('error', hadError.authError ? '密語錯誤' : '同步失敗');
+    if (!silent) toast(hadError.message || '同步失敗');
+    return false;
+  }
+  return true;
+}
+
+/** 伺服器版本為底，本機還沒送出去的變更蓋在上面 */
+function mergeById(serverRows, localRows) {
+  const map = new Map(serverRows.map((r) => [r.id, { ...r, _synced: true }]));
+  for (const local of localRows) {
+    if (local._op) map.set(local.id, local);
+  }
+  return [...map.values()];
+}
+
+/* ==========================================================================
+   資料存取
+   ========================================================================== */
+
+function live(entity) {
+  return state[entity].filter((r) => r._op !== 'delete');
+}
+
+function instrumentById(id) {
+  return state.instruments.find((i) => i.id === id) || null;
+}
+
+function instrumentName(id) {
+  const inst = instrumentById(id);
+  if (!inst) return '（已刪除的標的）';
+  return inst.name || inst.code || '未命名';
+}
+
+function instrumentsOf(type) {
+  return live('instruments')
+    .filter((i) => i.type === type)
+    .sort((a, b) => {
+      // 已出清的沉到最後，其餘照代號、名稱排
+      const closed = (x) => (x.status === '已出清' ? 1 : 0);
+      if (closed(a) !== closed(b)) return closed(a) - closed(b);
+      return String(a.code || a.name).localeCompare(String(b.code || b.name), 'zh-Hant');
+    });
+}
+
+function typeOfTrade(record) {
+  const inst = instrumentById(record.instrumentId);
+  return inst ? inst.type : ETF;
+}
+
+function priceOf(instrumentId) {
+  const row = live('prices').find((p) => p.id === instrumentId);
+  return row ? Number(row.price) || 0 : 0;
+}
+
+function priceRow(instrumentId) {
+  return live('prices').find((p) => p.id === instrumentId) || null;
+}
+
+/**
+ * 基金的單筆與定期定額在銀行是兩筆各自獨立的投資明細，各有各的平均淨值，
+ * 所以要當成兩個部位分開算。ETF 不分。
+ */
+function normalizeStyle(style) {
+  return style === '單筆' ? '單筆' : '小額';
+}
+
+function positionKey(instrumentId, type, style) {
+  return type === FUND ? `${instrumentId}|${normalizeStyle(style)}` : instrumentId;
+}
+
+/** 某個日期（含）之前累積的持有量，配息表單用來自動帶入持有單位 */
+function unitsHeldAt(instrumentId, date, style) {
+  const limit = sortKey(date || todayStr());
+  const inst = instrumentById(instrumentId);
+  const isFund = inst && inst.type === FUND;
+
+  return live('trades')
+    .filter((t) => t.instrumentId === instrumentId && sortKey(t.date) <= limit)
+    .filter((t) => !isFund || !style || normalizeStyle(t.style) === normalizeStyle(style))
+    .reduce((sum, t) => sum + (t.action === SELL ? -Number(t.quantity) : Number(t.quantity)), 0);
+}
+
+/* ==========================================================================
+   計算
+
+   加權平均成本：買進累積金額 ÷ 買進累積數量。賣出不改變平均成本。
+   手續費另外累加，攤進「含手續費的平均成本」——
+   它只用來算損益，不影響對帳單上看到的平均淨值。
+   ========================================================================== */
+
+/** 數量小於這個就當成零 —— 基金單位數有小數，浮點運算會留下 0.0000001 這種尾巴 */
+const EPS = 1e-6;
+
+/**
+ * 把一個部位的交易依時間切成一段一段的「持有回合」。
+ * 持股歸零就結束一段，下次買進開新的一段、成本從零重新算 ——
+ * 賣光之後買回來的那批，成本本來就跟賣掉的那批無關。
+ *
+ * 賣出時按當下的平均成本扣掉對應成本，所以部分賣出不會動到平均成本。
+ */
+function buildRounds(trades) {
+  const sorted = trades.slice().sort((a, b) => {
+    const cmp = sortKey(a.date).localeCompare(sortKey(b.date));
+    return cmp || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+  });
+
+  const rounds = [];
+  let cur = null;
+
+  const open = (date) => ({
+    startDate: date,
+    endDate: null,
+    qty: 0,
+    peakQty: 0,        // 這段期間最多持有過多少，已出清時顯示「曾持有」
+    cost: 0,           // 含手續費，算損益用
+    costExFee: 0,      // 不含手續費，對得上對帳單的平均成本
+    fee: 0,
+    realized: 0,
+    dividends: 0,
+    hasEstimate: false,
+    closed: false,
+  });
+
+  for (const t of sorted) {
+    const qty = Number(t.quantity) || 0;
+    if (!cur) cur = open(t.date);
+
+    if (t.action === SELL) {
+      const avgCost = cur.qty > EPS ? cur.cost / cur.qty : 0;
+      const avgExFee = cur.qty > EPS ? cur.costExFee / cur.qty : 0;
+      const sold = Math.min(qty, cur.qty);
+
+      // 錢是實收的全額，成本只能扣掉真正賣掉的那部分
+      cur.realized += (Number(t.cash) || 0) - sold * avgCost;
+      cur.cost -= sold * avgCost;
+      cur.costExFee -= sold * avgExFee;
+      cur.qty -= sold;
+
+      if (cur.qty <= EPS) {
+        cur.qty = 0;
+        cur.cost = 0;
+        cur.costExFee = 0;
+        cur.closed = true;
+        cur.endDate = t.date;
+        rounds.push(cur);
+        cur = null;
+      }
+    } else {
+      cur.qty += qty;
+      cur.cost += (Number(t.amount) || 0) + (Number(t.fee) || 0);
+      cur.costExFee += Number(t.amount) || 0;
+      cur.fee += Number(t.fee) || 0;
+      cur.peakQty = Math.max(cur.peakQty, cur.qty);
+      if (t.date === PRE) cur.hasEstimate = true;
+    }
+  }
+
+  if (cur) rounds.push(cur);
+  return rounds;
+}
+
+/**
+ * 配息歸到對應的持有回合。
+ * 用除息日判定（那天一定還持有），沒填才退回發放日；
+ * 除息後才賣掉、賣掉之後才入帳的配息，會落在最後那一段裡。
+ */
+function assignDividends(rounds, dividends) {
+  for (const d of dividends) {
+    const date = d.exDate || d.payDate;
+    let target = null;
+    for (const round of rounds) {
+      if (sortKey(round.startDate) <= sortKey(date)) target = round;
+    }
+    if (!target) target = rounds[0];
+    if (target) target.dividends += Number(d.received) || 0;
+  }
+}
+
+/**
+ * 所有部位。ETF 一檔一個；基金一檔分「單筆」與「定期定額」兩個。
+ * 每個部位帶著自己的持有回合，最後一段沒結束就是目前持有中的。
+ */
+function buildPositions() {
+  const map = new Map();
+
+  const ensure = (inst, style) => {
+    const key = positionKey(inst.id, inst.type, style);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        instrument: inst,
+        type: inst.type,
+        style: inst.type === FUND ? normalizeStyle(style) : '',
+        trades: [],
+        dividends: [],
+      });
+    }
+    return map.get(key);
+  };
+
+  for (const t of live('trades')) {
+    const inst = instrumentById(t.instrumentId);
+    if (inst) ensure(inst, t.style).trades.push(t);
+  }
+
+  for (const d of live('dividends')) {
+    const inst = instrumentById(d.instrumentId);
+    if (!inst) continue;
+
+    // 配息的型態跟交易對不起來時（例如只記了配息還沒記交易），
+    // 掛到這檔的第一個部位，至少不會憑空消失
+    const key = positionKey(inst.id, inst.type, d.style);
+    const position = map.get(key)
+      || [...map.values()].find((p) => p.instrument.id === inst.id);
+    if (position) position.dividends.push(d);
+  }
+
+  const positions = [];
+  for (const position of map.values()) {
+    const rounds = buildRounds(position.trades);
+    assignDividends(rounds, position.dividends);
+
+    const current = rounds.find((r) => !r.closed) || null;
+    const closed = rounds.filter((r) => r.closed);
+    const price = priceOf(position.instrument.id);
+
+    const qty = current ? current.qty : 0;
+    const cost = current ? current.cost : 0;
+    const value = price ? qty * price : 0;
+
+    positions.push({
+      ...position,
+      rounds,
+      current,
+      closed,
+      qty,
+      cost,
+      price,
+      value,
+      hasPrice: price > 0,
+      avgPrice: current && current.qty > EPS ? current.costExFee / current.qty : 0,
+      unrealized: price ? value - cost : null,
+      dividends: current ? current.dividends : 0,
+      hasEstimate: current ? current.hasEstimate : false,
+      pastRealized: closed.reduce((sum, r) => sum + r.realized, 0),
+      allDividends: rounds.reduce((sum, r) => sum + r.dividends, 0),
+    });
+  }
+
+  return positions;
+}
+
+/** 目前還持有的部位 */
+function heldPositions() {
+  return buildPositions().filter((p) => p.qty > EPS);
+}
+
+/** 已出清的每一段，新的在前面 */
+function closedRounds() {
+  const out = [];
+  for (const position of buildPositions()) {
+    for (const round of position.closed) {
+      out.push({ position, round });
+    }
+  }
+  return out.sort((a, b) => sortKey(b.round.endDate).localeCompare(sortKey(a.round.endDate)));
+}
+
+/**
+ * 帳戶餘額 ＝ 期初 ＋ 存入 − 提領 ＋ 賣出實收 ＋ 配息實領 − 買進實扣
+ * 兩個帳戶各算各的：ETF 走券商，基金走基金平台。
+ *
+ * 「2025 之前」的期初持股不扣款 —— 那筆錢在期初餘額被填進來之前
+ * 早就付掉了，再扣一次會變成負的。
+ */
+function balanceOf(type) {
+  const account = ACCOUNT_OF[type];
+  let balance = 0;
+
+  for (const c of live('cashflows')) {
+    if (c.account !== account) continue;
+    balance += c.action === '提領' ? -(Number(c.amount) || 0) : (Number(c.amount) || 0);
+  }
+  for (const t of live('trades')) {
+    if (typeOfTrade(t) !== type || t.date === PRE) continue;
+    balance += t.action === SELL ? (Number(t.cash) || 0) : -(Number(t.cash) || 0);
+  }
+  for (const d of live('dividends')) {
+    if (typeOfTrade(d) !== type) continue;
+    balance += Number(d.received) || 0;
+  }
+  return balance;
+}
+
+/** 某一年的配息，依發放日歸月。期初那些沒有日期的紀錄不會出現在這裡 */
+function dividendStats(year) {
+  const months = MONTH_LABELS.map(() => ({ [ETF]: 0, [FUND]: 0, total: 0 }));
+  let etf = 0, fund = 0;
+
+  for (const d of live('dividends')) {
+    if (yearOf(d.payDate) !== year) continue;
+    const m = monthOf(d.payDate);
+    if (!m) continue;
+    const amount = Number(d.received) || 0;
+    const type = typeOfTrade(d);
+    months[m - 1][type] += amount;
+    months[m - 1].total += amount;
+    if (type === FUND) fund += amount; else etf += amount;
+  }
+
+  return { months, etf, fund, total: etf + fund };
+}
+
+/** 今年只算到這個月為止，去年以前就是整整 12 個月 */
+function monthsElapsed(year) {
+  const now = new Date();
+  if (year > now.getFullYear()) return 1;
+  if (year < now.getFullYear()) return 12;
+  return now.getMonth() + 1;
+}
+
+/** 有紀錄的年份，加上今年，新的在前面 */
+function availableYears() {
+  const years = new Set([thisYear()]);
+  for (const d of live('dividends')) {
+    const y = yearOf(d.payDate);
+    if (y) years.add(y);
+  }
+  for (const t of live('trades')) {
+    const y = yearOf(t.date);
+    if (y) years.add(y);
+  }
+  return [...years].sort((a, b) => b - a);
+}
+
+/* ==========================================================================
+   渲染
+   ========================================================================== */
+
+function render() {
+  const page = state.page;
+  $('page-record').hidden = page !== 'record';
+  $('page-report').hidden = page !== 'report';
+  $('page-holdings').hidden = page !== 'holdings';
+  $('page-settings').hidden = page !== 'settings';
+
+  for (const tab of document.querySelectorAll('.tab')) {
+    const active = tab.dataset.page === page;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+  $('btn-settings').classList.toggle('is-active', page === 'settings');
+
+  const titles = { record: '存錢筒', report: '報表', holdings: '持股', settings: '設定' };
+  $('topbar-title').textContent = titles[page] || '存錢筒';
+
+  if (page === 'record') renderRecord();
+  if (page === 'report') renderReport();
+  if (page === 'holdings') renderHoldings();
+  if (page === 'settings') renderSettings();
+}
+
+/* ---------- 記錄頁 ---------- */
+
+function renderRecord() {
+  const year = thisYear();
+  const stats = dividendStats(year);
+  const elapsed = monthsElapsed(year);
+
+  $('summary-label').textContent = `${year} 年配息`;
+  $('summary-total').textContent = fmtMoney(stats.total);
+  $('summary-avg').textContent = fmtMoney(stats.total / elapsed);
+
+  for (const btn of document.querySelectorAll('.picker__btn')) {
+    btn.classList.toggle('is-active', btn.dataset.category === state.category);
+  }
+
+  const actions = $('actions');
+  actions.hidden = !state.category;
+  if (state.category) $('actions-title').textContent = state.category;
+
+  renderRecent();
+}
+
+function renderRecent() {
+  const list = $('recent-list');
+  const entries = recentEntries();
+
+  $('recent-title').textContent = state.category ? `最近的${state.category}紀錄` : '最近紀錄';
+  $('record-empty').hidden = entries.length > 0 || live('trades').length > 0;
+
+  list.innerHTML = entries.map(entryHtml).join('');
+}
+
+/** 三種紀錄混在一起，照日期新的在前 */
+function recentEntries() {
+  const cat = state.category;
+  const out = [];
+
+  for (const t of live('trades')) {
+    if (cat && typeOfTrade(t) !== cat) continue;
+    out.push({ kind: 'trade', record: t, date: t.date });
+  }
+  for (const d of live('dividends')) {
+    if (cat && typeOfTrade(d) !== cat) continue;
+    out.push({ kind: 'dividend', record: d, date: d.payDate });
+  }
+  for (const c of live('cashflows')) {
+    if (cat && c.account !== ACCOUNT_OF[cat]) continue;
+    out.push({ kind: 'cash', record: c, date: c.date });
+  }
+
+  return out
+    .sort((a, b) => {
+      const cmp = sortKey(b.date).localeCompare(sortKey(a.date));
+      if (cmp) return cmp;
+      return String(b.record.createdAt || '').localeCompare(String(a.record.createdAt || ''));
+    })
+    .slice(0, 12);
+}
+
+function entryHtml(entry) {
+  const r = entry.record;
+
+  if (entry.kind === 'trade') {
+    const inst = instrumentById(r.instrumentId);
+    const type = inst ? inst.type : ETF;
+    const isBuy = r.action !== SELL;
+    const meta = [
+      fmtDate(r.date),
+      fmtQty(type, r.quantity),
+      r.price ? `@ ${fmtNum(r.price, 4)}` : '',
+      r.style || '',
+    ].filter(Boolean).join(' · ');
+
+    // 期初那筆沒有實際扣款，顯示金額只會讓人以為當天真的付了錢
+    const amountHtml = r.date === PRE
+      ? '<span class="entry__amount entry__amount--none">期初</span>'
+      : `<span class="entry__amount ${isBuy ? 'entry__amount--out' : 'entry__amount--in'}">
+           ${isBuy ? '−' : '+'}${fmtMoney(r.cash).replace('−', '')}
+         </span>`;
+
+    return `
+      <button class="entry" type="button" data-entity="trades" data-id="${escapeHtml(r.id)}">
+        <span class="entry__tag entry__tag--${isBuy ? 'buy' : 'sell'}">${isBuy ? '買' : '賣'}</span>
+        <span class="entry__body">
+          <span class="entry__name">${escapeHtml(instrumentName(r.instrumentId))}</span>
+          <span class="entry__meta">${escapeHtml(meta)}</span>
+        </span>
+        ${amountHtml}
+      </button>`;
+  }
+
+  if (entry.kind === 'dividend') {
+    const meta = [fmtDate(r.payDate), r.perUnit ? `每單位 ${fmtNum(r.perUnit, 4)}` : '']
+      .filter(Boolean).join(' · ');
+    return `
+      <button class="entry" type="button" data-entity="dividends" data-id="${escapeHtml(r.id)}">
+        <span class="entry__tag entry__tag--div">息</span>
+        <span class="entry__body">
+          <span class="entry__name">${escapeHtml(instrumentName(r.instrumentId))}</span>
+          <span class="entry__meta">${escapeHtml(meta)}</span>
+        </span>
+        <span class="entry__amount entry__amount--in">+${fmtMoney(r.received).replace('−', '')}</span>
+      </button>`;
+  }
+
+  const isIn = r.action !== '提領';
+  const meta = [fmtDate(r.date), r.account === '券商' ? '券商' : '基金平台', r.note || '']
+    .filter(Boolean).join(' · ');
+  return `
+    <button class="entry" type="button" data-entity="cashflows" data-id="${escapeHtml(r.id)}">
+      <span class="entry__tag entry__tag--cash">⇅</span>
+      <span class="entry__body">
+        <span class="entry__name">${isIn ? '存入' : '提領'}</span>
+        <span class="entry__meta">${escapeHtml(meta)}</span>
+      </span>
+      <span class="entry__amount ${isIn ? 'entry__amount--in' : 'entry__amount--out'}">
+        ${isIn ? '+' : '−'}${fmtMoney(r.amount).replace('−', '')}
+      </span>
+    </button>`;
+}
+
+/* ---------- 報表頁 ---------- */
+
+function renderReport() {
+  const years = availableYears();
+  if (!state.reportYear || !years.includes(state.reportYear)) state.reportYear = years[0];
+  const year = state.reportYear;
+
+  $('year-bar').innerHTML = years.map((y) => `
+    <button class="yearbar__btn ${y === year ? 'is-active' : ''}" type="button" data-year="${y}">
+      ${y} 年
+    </button>`).join('');
+
+  const stats = dividendStats(year);
+  const elapsed = monthsElapsed(year);
+
+  $('rp-total').textContent = fmtMoney(stats.total);
+  $('rp-avg').textContent = fmtMoney(stats.total / elapsed);
+  $('rp-avg-label').textContent = year === thisYear()
+    ? `平均每月（÷ ${elapsed} 個月）`
+    : '平均每月（÷ 12）';
+  $('rp-etf').textContent = fmtMoney(stats.etf);
+  $('rp-fund').textContent = fmtMoney(stats.fund);
+
+  renderChart(stats, year);
+
+  $('bal-etf').textContent = fmtMoney(balanceOf(ETF));
+  $('bal-fund').textContent = fmtMoney(balanceOf(FUND));
+
+  const positions = buildPositions();
+  const held = positions.filter((p) => p.qty > EPS);
+
+  const cost = held.reduce((s, p) => s + p.cost, 0);
+  const value = held.reduce((s, p) => s + (p.hasPrice ? p.value : p.cost), 0);
+
+  // 已實現損益要算進所有回合，包含賣光之後又買回來的那些
+  const realizedOf = (type) => positions
+    .filter((p) => p.type === type)
+    .reduce((sum, p) => sum + p.rounds.reduce((a, r) => a + r.realized, 0), 0);
+  const realizedEtf = realizedOf(ETF);
+  const realizedFund = realizedOf(FUND);
+
+  const allDiv = live('dividends').reduce((s, d) => s + (Number(d.received) || 0), 0);
+  // 基金的兩個部位共用同一個淨值，所以要照標的去重，不然會多算一次
+  const missing = new Set(held.filter((p) => !p.hasPrice).map((p) => p.instrument.id)).size;
+
+  $('rp-cost').textContent = fmtMoney(cost);
+  $('rp-value').textContent = fmtMoney(value);
+  setPL($('rp-unreal'), value - cost);
+  setPL($('rp-real'), realizedEtf + realizedFund);
+  $('rp-alldiv').textContent = fmtMoney(allDiv);
+
+  $('rp-real-split').hidden = Math.round(realizedEtf + realizedFund) === 0;
+  $('rp-real-etf').textContent = fmtMoney(realizedEtf, { sign: true });
+  $('rp-real-fund').textContent = fmtMoney(realizedFund, { sign: true });
+
+  const hint = $('rp-price-hint');
+  hint.hidden = missing === 0;
+  hint.textContent = missing
+    ? `有 ${missing} 檔還沒填現價，市值先用成本計算 —— 到「持股」更新一下比較準。`
+    : '';
+}
+
+function setPL(el, value) {
+  const v = Math.round(value);
+  el.textContent = fmtMoney(v, { sign: true });
+  el.classList.toggle('is-gain', v > 0);
+  el.classList.toggle('is-loss', v < 0);
+}
+
+function renderChart(stats, year) {
+  const max = Math.max(...stats.months.map((m) => m.total), 1);
+  const currentMonth = year === thisYear() ? new Date().getMonth() + 1 : 0;
+
+  $('chart').innerHTML = stats.months.map((m, i) => {
+    const height = m.total ? Math.max(4, (m.total / max) * 100) : 0;
+    const etfPart = m.total ? (m[ETF] / m.total) * 100 : 0;
+    const fundPart = m.total ? (m[FUND] / m.total) * 100 : 0;
+
+    return `
+      <div class="chart__col ${i + 1 === currentMonth ? 'is-current' : ''}">
+        <span class="chart__value">${fmtShort(m.total)}</span>
+        <div class="chart__bar" style="height:${height}%">
+          <div class="chart__seg chart__seg--etf" style="height:${etfPart}%"></div>
+          <div class="chart__seg chart__seg--fund" style="height:${fundPart}%"></div>
+        </div>
+        <span class="chart__label">${MONTH_LABELS[i]}</span>
+      </div>`;
+  }).join('');
+}
+
+/* ---------- 持股頁 ---------- */
+
+function renderHoldings() {
+  const positions = buildPositions();
+  const held = positions.filter((p) => p.qty > EPS);
+
+  const value = held.reduce((s, p) => s + (p.hasPrice ? p.value : p.cost), 0);
+  const cost = held.reduce((s, p) => s + p.cost, 0);
+
+  $('hd-value').textContent = fmtMoney(value);
+  $('hd-cost').textContent = fmtMoney(cost);
+  setPL($('hd-pl'), value - cost);
+
+  const closed = closedRounds();
+  $('holdings-empty').hidden = held.length > 0 || closed.length > 0;
+  $('holdings-totals').hidden = held.length === 0;
+
+  // 有 ETF 才顯示「更新現價」—— 基金沒有公開報價可抓
+  const etfs = held.filter((p) => p.type === ETF);
+  $('quote-bar').hidden = etfs.length === 0;
+
+  const stamps = etfs
+    .map((p) => priceRow(p.instrument.id))
+    .filter((row) => row && row.updatedAt)
+    .map((row) => row.updatedAt)
+    .sort();
+  $('quote-hint').textContent = stamps.length
+    ? `上次更新 ${fmtStamp(stamps[stamps.length - 1])}`
+    : '從證交所抓，盤後是當日收盤';
+
+  // 同一檔基金的單筆與定期定額要並在同一張卡片裡，所以先照標的收攏
+  const cards = [];
+  const byInstrument = new Map();
+  for (const position of held) {
+    const id = position.instrument.id;
+    if (!byInstrument.has(id)) {
+      const card = { instrument: position.instrument, type: position.type, lots: [] };
+      byInstrument.set(id, card);
+      cards.push(card);
+    }
+    byInstrument.get(id).lots.push(position);
+  }
+
+  const groups = [
+    { type: ETF, rows: cards.filter((c) => c.type === ETF) },
+    { type: FUND, rows: cards.filter((c) => c.type === FUND) },
+  ].filter((g) => g.rows.length);
+
+  $('holdings-list').innerHTML = groups.map((g) => `
+    <p class="hold-group__title">${g.type}</p>
+    ${g.rows.map(holdingHtml).join('')}
+  `).join('');
+
+  renderClosed(closed);
+}
+
+/** 損益數字 ＋ 報酬率，成本為零時不顯示百分比 */
+function plHtml(amount, base, { cls = 'hold__pl' } = {}) {
+  if (amount === null || amount === undefined) return `<span class="${cls} is-flat">—</span>`;
+  const v = Math.round(amount);
+  const tone = v > 0 ? 'is-gain' : (v < 0 ? 'is-loss' : 'is-flat');
+  const pct = base ? (amount / base) * 100 : 0;
+  const pctHtml = base
+    ? `<small class="pl__pct">${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%</small>`
+    : '';
+  return `<span class="${cls} ${tone}">${fmtMoney(v, { sign: true })}${pctHtml}</span>`;
+}
+
+function holdingHtml(card) {
+  const inst = card.instrument;
+  const isETF = card.type === ETF;
+  const priceLabel = isETF ? '現價' : '淨值';
+  const lots = card.lots;
+
+  const qty = lots.reduce((s, p) => s + p.qty, 0);
+  const cost = lots.reduce((s, p) => s + p.cost, 0);
+  const dividends = lots.reduce((s, p) => s + p.dividends, 0);
+  const past = lots.reduce((s, p) => s + p.pastRealized, 0);
+  const hasPrice = lots[0].hasPrice;
+  const price = lots[0].price;
+  const value = hasPrice ? qty * price : 0;
+  const hasEstimate = lots.some((p) => p.hasEstimate);
+
+  const row = priceRow(inst.id);
+  const updated = row && row.updatedAt ? fmtDate(String(row.updatedAt).slice(0, 10)) : '';
+
+  // 同一檔基金有單筆也有定期定額時，上面顯示合計、下面拆開列
+  const split = lots.length > 1;
+  const singleStyle = !split && card.type === FUND ? styleLabel(lots[0].style) : '';
+
+  const notes = [];
+  if (hasEstimate) notes.push('含 2025 之前概估期初，成本僅供參考');
+  if (Math.round(past) !== 0) notes.push(`過去已實現 ${fmtMoney(past, { sign: true })}`);
+
+  return `
+    <div class="hold ${isETF ? 'hold--etf' : 'hold--fund'}">
+      <div class="hold__head">
+        <span class="hold__name">${escapeHtml(inst.name || '未命名')}${
+          inst.code ? `<span class="hold__code">${escapeHtml(inst.code)}</span>` : ''
+        }${singleStyle ? `<span class="hold__tag">${singleStyle}</span>` : ''}</span>
+        ${hasPrice ? plHtml(value - cost, cost) : '<span class="hold__pl is-flat">—</span>'}
+      </div>
+
+      <div class="hold__grid">
+        <span class="hold__cell"><span>持有</span><span class="hold__num">${fmtQty(card.type, qty)}</span></span>
+        ${split
+          ? `<span class="hold__cell"><span>${priceLabel}</span><span class="hold__num">${hasPrice ? fmtNum(price, 4) : '未填'}</span></span>`
+          : `<span class="hold__cell"><span>平均成本</span><span class="hold__num">${fmtNum(lots[0].avgPrice, 4)}</span></span>
+             <span class="hold__cell"><span>${priceLabel}</span><span class="hold__num">${hasPrice ? fmtNum(price, 4) : '未填'}</span></span>`
+        }
+        <span class="hold__cell"><span>市值</span><span class="hold__num">${hasPrice ? fmtMoney(value) : '—'}</span></span>
+        <span class="hold__cell"><span>投入成本</span><span class="hold__num">${fmtMoney(cost)}</span></span>
+        <span class="hold__cell"><span>累計配息</span><span class="hold__num">${fmtMoney(dividends)}</span></span>
+      </div>
+
+      ${split ? `<div class="lots">${lots.map((p) => lotHtml(p, hasPrice)).join('')}</div>` : ''}
+
+      <div class="hold__foot">
+        <span class="hold__note">${escapeHtml(notes.join(' · '))}</span>
+        <button class="hold__price-btn ${hasPrice ? '' : 'is-missing'}" type="button"
+                data-price-id="${escapeHtml(inst.id)}">
+          ${hasPrice ? `更新${priceLabel}${updated ? ` · ${updated}` : ''}` : `填${priceLabel}`}
+        </button>
+      </div>
+    </div>`;
+}
+
+function styleLabel(style) {
+  return style === '單筆' ? '單筆' : '定期定額';
+}
+
+function lotHtml(position, hasPrice) {
+  const unrealized = hasPrice ? position.value - position.cost : null;
+  // 這裡不放報酬率，卡片上方已經有整檔的了，一行塞四個數字會擠掉平均成本
+  return `
+    <div class="lot">
+      <span class="lot__name">${styleLabel(position.style)}</span>
+      <span class="lot__qty">${fmtQty(position.type, position.qty)}</span>
+      <span class="lot__avg">平均 ${fmtNum(position.avgPrice, 4)}</span>
+      ${plHtml(unrealized, 0, { cls: 'lot__pl' })}
+    </div>`;
+}
+
+/** 已出清：預設收起來，上面那排數字才不會被歷史洗掉 */
+function renderClosed(rounds) {
+  const section = $('closed-section');
+  section.hidden = rounds.length === 0;
+  if (!rounds.length) return;
+
+  const total = rounds.reduce((sum, r) => sum + r.round.realized, 0);
+  $('closed-title').textContent =
+    `已出清 ${rounds.length} 筆 · 已實現 ${fmtMoney(total, { sign: true })}`;
+
+  $('btn-closed-toggle').setAttribute('aria-expanded', state.showClosed ? 'true' : 'false');
+  $('btn-closed-toggle').classList.toggle('is-open', state.showClosed);
+  $('closed-list').hidden = !state.showClosed;
+
+  $('closed-list').innerHTML = rounds.map(({ position, round }) => {
+    const inst = position.instrument;
+    const tag = position.type === FUND ? `<span class="hold__tag">${styleLabel(position.style)}</span>` : '';
+    const period = `${fmtDate(round.startDate)} – ${fmtDate(round.endDate)}`;
+    const meta = [
+      period,
+      `曾持有 ${fmtQty(position.type, round.peakQty)}`,
+      round.dividends ? `期間配息 ${fmtMoney(round.dividends)}` : '',
+    ].filter(Boolean).join(' · ');
+
+    return `
+      <div class="closed__item">
+        <div class="closed__head">
+          <span class="closed__name">${escapeHtml(inst.name || '未命名')}${
+            inst.code ? `<span class="hold__code">${escapeHtml(inst.code)}</span>` : ''
+          }${tag}</span>
+          ${plHtml(round.realized, 0, { cls: 'closed__pl' })}
+        </div>
+        <div class="closed__meta">${escapeHtml(meta)}</div>
+      </div>`;
+  }).join('');
+}
+
+/* ---------- 設定頁 ---------- */
+
+function renderSettings() {
+  $('api-url').value = state.apiUrl;
+  $('api-secret').value = state.secret;
+
+  for (const chip of document.querySelectorAll('#theme-chips .chip')) {
+    chip.classList.toggle('is-active', chip.dataset.themePref === state.theme);
+  }
+
+  $('stat-instruments').textContent = live('instruments').length;
+  $('stat-trades').textContent = live('trades').length;
+  $('stat-dividends').textContent = live('dividends').length;
+  $('stat-cashflows').textContent = live('cashflows').length;
+  $('stat-pending').textContent = pendingCount();
+  $('stat-lastsync').textContent = state.lastSync
+    ? new Date(state.lastSync).toLocaleString('zh-TW', { hour12: false }).replace(/:\d\d$/, '')
+    : '—';
+
+  const list = live('instruments');
+  $('instrument-list').innerHTML = list.length
+    ? list.map((i) => `
+        <button class="chip-list__item chip-list__item--${i.type === ETF ? 'etf' : 'fund'}
+                ${i.status === '已出清' ? 'is-closed' : ''}"
+                type="button" data-instrument-id="${escapeHtml(i.id)}">
+          ${escapeHtml(i.code ? `${i.code} ${i.name}` : i.name)}
+        </button>`).join('')
+    : '<p class="chip-list__empty">還沒有標的</p>';
+}
+
+/* ==========================================================================
+   底部面板
+
+   一次只開一個。開啟時鎖住背景捲動，關閉時把暫存清乾淨。
+   ========================================================================== */
+
+let openSheetId = null;
+
+function openSheet(id) {
+  closeSheet(true);
+  openSheetId = id;
+  const sheet = $(id);
+  const scrim = $('scrim');
+
+  sheet.hidden = false;
+  scrim.hidden = false;
+  document.body.style.overflow = 'hidden';
+  requestAnimationFrame(() => {
+    sheet.classList.add('is-open');
+    scrim.classList.add('is-open');
+  });
+}
+
+function closeSheet(immediate = false) {
+  if (!openSheetId) return;
+  const sheet = $(openSheetId);
+  const scrim = $('scrim');
+  const id = openSheetId;
+  openSheetId = null;
+
+  sheet.classList.remove('is-open');
+  scrim.classList.remove('is-open');
+  document.body.style.overflow = '';
+
+  const hide = () => {
+    if (openSheetId !== id) { sheet.hidden = true; }
+    if (!openSheetId) scrim.hidden = true;
+  };
+  if (immediate) { sheet.hidden = true; scrim.hidden = true; } else { setTimeout(hide, 240); }
+
+  state.editing = null;
+}
+
+function showError(id, message) {
+  const el = $(id);
+  el.textContent = message;
+  el.hidden = !message;
+}
+
+/** 選項按鈕（chips）：同一組內只有一個是選中的 */
+function setChips(containerId, attr, value) {
+  for (const chip of document.querySelectorAll(`#${containerId} .chip`)) {
+    chip.classList.toggle('is-active', chip.dataset[attr] === value);
+  }
+}
+
+function chipValue(containerId, attr) {
+  const active = document.querySelector(`#${containerId} .chip.is-active`);
+  return active ? active.dataset[attr] : '';
+}
+
+/** 填入下拉的標的清單，順便處理「＋ 新增標的」那一項 */
+function fillInstrumentSelect(selectId, type, selectedId) {
+  const select = $(selectId);
+  const list = instrumentsOf(type);
+
+  select.innerHTML = [
+    '<option value="">請選擇…</option>',
+    ...list.map((i) => `
+      <option value="${escapeHtml(i.id)}" ${i.id === selectedId ? 'selected' : ''}>
+        ${escapeHtml(i.code ? `${i.code} ${i.name}` : i.name)}${i.status === '已出清' ? '（已出清）' : ''}
+      </option>`),
+    '<option value="__new">＋ 新增標的…</option>',
+  ].join('');
+
+  if (selectedId) select.value = selectedId;
+}
+
+/* ==========================================================================
+   買進 / 賣出表單
+   ========================================================================== */
+
+function openTradeSheet({ category, action, record = null }) {
+  state.draft = {
+    category,
+    action,
+    unit: category === ETF ? '股' : '',
+    style: category === FUND ? '小額' : '',
+  };
+  state.editing = record ? { entity: 'trades', id: record.id } : null;
+
+  const isBuy = action === BUY;
+  $('trade-sheet-title').textContent = `${category} · ${isBuy ? '買進' : '賣出'}`;
+  $('btn-trade-delete').hidden = !record;
+  showError('trade-error', '');
+
+  fillInstrumentSelect('t-instrument', category, record ? record.instrumentId : '');
+
+  // 欄位標籤與順序：ETF 照券商的想法（數量→價格→金額），
+  // 基金照銀行對帳單的順序（金額→淨值→單位數）
+  const isETF = category === ETF;
+  $('t-qty-field').style.order = isETF ? '1' : '3';
+  $('t-price-field').style.order = '2';
+  $('t-amount-field').style.order = isETF ? '3' : '1';
+
+  $('t-qty-label').textContent = isETF ? '數量' : '單位數';
+  $('t-price-label').textContent = isETF ? (isBuy ? '成交價' : '賣出價') : '淨值';
+  $('t-amount-label').textContent = isETF ? '成交金額' : (isBuy ? '申購金額' : '贖回金額');
+  $('t-cash-label').textContent = isBuy ? '帳戶實扣' : '帳戶實收';
+  $('t-cash-hint').textContent = isBuy
+    ? '自動帶入「金額＋手續費」，改成銀行實際扣款最準'
+    : '自動帶入「金額−手續費」，改成實際入帳金額最準';
+  $('t-amount-hint').textContent = isETF ? '' : '對帳單上的申購金額';
+
+  $('t-unit-chips').hidden = !isETF;
+  $('t-style-field').hidden = isETF;
+
+  if (record) {
+    // 編輯既有紀錄：數量若剛好是整張就用「張」顯示，比較好核對
+    const useLot = isETF && record.quantity >= 1000 && record.quantity % 1000 === 0;
+    state.draft.unit = useLot ? '張' : '股';
+    state.draft.style = record.style || (category === FUND ? '小額' : '');
+
+    $('t-qty').value = useLot ? fmtNum(record.quantity / 1000, 3) : fmtNum(record.quantity, 4);
+    $('t-price').value = record.price ? fmtNum(record.price, 6) : '';
+    $('t-amount').value = record.amount ? fmtNum(record.amount, 2) : '';
+    $('t-fee').value = record.fee ? fmtNum(record.fee, 2) : '';
+    $('t-cash').value = record.cash ? fmtNum(record.cash, 2) : '';
+    $('t-note').value = record.note || '';
+    $('t-date').value = record.date === PRE ? '' : record.date;
+    $('t-initial').checked = record.date === PRE;
+    // 編輯時不要再自動覆寫使用者當初存的數字
+    for (const id of ['t-qty', 't-amount', 't-cash']) $(id).dataset.auto = '0';
+  } else {
+    for (const id of ['t-qty', 't-price', 't-amount', 't-fee', 't-cash', 't-note']) $(id).value = '';
+    $('t-date').value = todayStr();
+    $('t-initial').checked = false;
+    for (const id of ['t-qty', 't-amount', 't-cash']) $(id).dataset.auto = '1';
+  }
+
+  setChips('t-unit-chips', 'unit', state.draft.unit);
+  setChips('t-style-chips', 'style', state.draft.style);
+  syncTradeInitial();
+  updateTradeHints();
+
+  openSheet('trade-sheet');
+}
+
+/** 期初持股不影響帳戶餘額，「帳戶實扣」那欄就沒有意義，收起來 */
+function syncTradeInitial() {
+  const on = $('t-initial').checked;
+  syncInitialToggle('t-initial', 't-date', 't-initial-hint');
+  $('t-cash').closest('.field').hidden = on;
+
+  // 2025 之前的舊部位一律整筆算，不拆定期定額的每一期
+  if (on && state.draft.category === FUND) {
+    state.draft.style = '單筆';
+    setChips('t-style-chips', 'style', '單筆');
+  }
+}
+
+/** 勾了「2025 之前」就用不到日期欄了 */
+function syncInitialToggle(toggleId, dateId, hintId) {
+  const on = $(toggleId).checked;
+  $(dateId).disabled = on;
+  $(dateId).style.opacity = on ? '.45' : '';
+  if (hintId) $(hintId).hidden = !on;
+}
+
+/**
+ * 三個數字欄位互相推算。只動「還沒被手動改過」的欄位（dataset.auto === '1'），
+ * 使用者一旦自己輸入，那欄就不再被蓋掉。
+ */
+function recalcTrade(changed) {
+  const isETF = state.draft.category === ETF;
+  const isBuy = state.draft.action === BUY;
+
+  if (changed) $(changed).dataset.auto = '0';
+
+  const unitScale = state.draft.unit === '張' ? 1000 : 1;
+  const qtyInput = parseNum($('t-qty').value);
+  const qty = qtyInput * unitScale;
+  const price = parseNum($('t-price').value);
+  const amount = parseNum($('t-amount').value);
+  const fee = parseNum($('t-fee').value);
+
+  let nextAmount = amount;
+
+  if (isETF) {
+    // 數量 × 價格 → 金額
+    if ($('t-amount').dataset.auto === '1' && qty && price) {
+      nextAmount = Math.round(qty * price);
+      $('t-amount').value = fmtNum(nextAmount, 2);
+    }
+  } else {
+    // 金額 ÷ 淨值 → 單位數
+    if ($('t-qty').dataset.auto === '1' && amount && price) {
+      $('t-qty').value = fmtNum(amount / price, 4);
+    }
+  }
+
+  if ($('t-cash').dataset.auto === '1' && nextAmount) {
+    const cash = isBuy ? nextAmount + fee : nextAmount - fee;
+    $('t-cash').value = fmtNum(Math.round(cash * 100) / 100, 2);
+  }
+
+  updateTradeHints();
+}
+
+function updateTradeHints() {
+  const isETF = state.draft.category === ETF;
+  const hint = $('t-qty-hint');
+
+  if (!isETF) { hint.textContent = ''; hint.classList.remove('is-calc'); return; }
+
+  const unitScale = state.draft.unit === '張' ? 1000 : 1;
+  const qty = parseNum($('t-qty').value) * unitScale;
+  if (!qty) { hint.textContent = ''; hint.classList.remove('is-calc'); return; }
+
+  hint.textContent = state.draft.unit === '張'
+    ? `＝ ${fmtNum(qty, 0)} 股`
+    : (qty % 1000 === 0 ? `＝ ${fmtNum(qty / 1000, 2)} 張` : `不足整張（1 張 ＝ 1000 股）`);
+  hint.classList.add('is-calc');
+}
+
+function submitTrade() {
+  const instrumentId = $('t-instrument').value;
+  if (!instrumentId || instrumentId === '__new') return showError('trade-error', '請選擇標的');
+
+  const isInitial = $('t-initial').checked;
+  const date = isInitial ? PRE : $('t-date').value;
+  if (!date) return showError('trade-error', '請選日期');
+
+  const unitScale = state.draft.unit === '張' ? 1000 : 1;
+  const quantity = parseNum($('t-qty').value) * unitScale;
+  if (!quantity) return showError('trade-error', state.draft.category === ETF ? '請填數量' : '請填單位數');
+
+  const amount = parseNum($('t-amount').value);
+  const price = parseNum($('t-price').value);
+  const fee = parseNum($('t-fee').value);
+  const cashInput = $('t-cash').value.trim();
+  const isBuy = state.draft.action === BUY;
+  // 期初那筆的錢早就付掉了，記 0 才不會被算進帳戶餘額
+  const cash = isInitial ? 0
+    : (cashInput ? parseNum(cashInput) : (isBuy ? amount + fee : amount - fee));
+
+  const inst = instrumentById(instrumentId);
+  const record = {
+    id: state.editing ? state.editing.id : uuid(),
+    instrumentId,
+    code: inst ? (inst.code || inst.name) : '',
+    date,
+    action: isBuy ? BUY : SELL,
+    style: state.draft.category === FUND ? chipValue('t-style-chips', 'style') : '',
+    quantity,
+    price,
+    amount: amount || (price ? quantity * price : 0),
+    fee,
+    cash,
+    note: $('t-note').value.trim(),
+  };
+
+  upsert('trades', record);
+  closeSheet();
+  toast(isBuy ? '記下買進' : '記下賣出');
+}
+
+/* ==========================================================================
+   配息表單
+   ========================================================================== */
+
+function openDividendSheet({ category, record = null }) {
+  state.draft = { category };
+  state.editing = record ? { entity: 'dividends', id: record.id } : null;
+
+  $('dividend-sheet-title').textContent = `${category} · 配息`;
+  $('btn-dividend-delete').hidden = !record;
+  showError('dividend-error', '');
+
+  fillInstrumentSelect('d-instrument', category, record ? record.instrumentId : '');
+
+  // 基金的單筆與定期定額配息分開發，ETF 不分
+  $('d-style-field').hidden = category !== FUND;
+  setChips('d-style-chips', 'dstyle', record ? normalizeStyle(record.style) : '小額');
+
+  if (record) {
+    $('d-exdate').value = record.exDate || '';
+    $('d-paydate').value = record.payDate || '';
+    $('d-perunit').value = record.perUnit ? fmtNum(record.perUnit, 6) : '';
+    $('d-units').value = record.units ? fmtNum(record.units, 4) : '';
+    $('d-received').value = record.received ? fmtNum(record.received, 2) : '';
+    $('d-note').value = record.note || '';
+    $('d-units').dataset.auto = '0';
+  } else {
+    $('d-exdate').value = '';
+    $('d-paydate').value = todayStr();
+    for (const id of ['d-perunit', 'd-units', 'd-received', 'd-note']) $(id).value = '';
+    $('d-units').dataset.auto = '1';
+  }
+
+  updateDividendHints();
+  openSheet('dividend-sheet');
+}
+
+/** 選了標的、填了除息日之後，自動帶入當時的持有單位 */
+function autofillUnits() {
+  if ($('d-units').dataset.auto !== '1') return;
+  const instrumentId = $('d-instrument').value;
+  if (!instrumentId || instrumentId === '__new') return;
+
+  const date = $('d-exdate').value || $('d-paydate').value || todayStr();
+  const style = state.draft.category === FUND ? chipValue('d-style-chips', 'dstyle') : '';
+  const units = unitsHeldAt(instrumentId, date, style);
+  $('d-units').value = units > 0 ? fmtNum(units, 4) : '';
+}
+
+function updateDividendHints() {
+  const instrumentId = $('d-instrument').value;
+  const inst = instrumentId && instrumentId !== '__new' ? instrumentById(instrumentId) : null;
+
+  const freqHint = $('d-freq-hint');
+  if (inst) {
+    const last = live('dividends')
+      .filter((d) => d.instrumentId === inst.id && d.payDate)
+      .sort((a, b) => sortKey(b.payDate).localeCompare(sortKey(a.payDate)))[0];
+    freqHint.textContent = [
+      inst.frequency || '',
+      last ? `上次配息 ${fmtDate(last.payDate)}` : '',
+    ].filter(Boolean).join(' · ');
+  } else {
+    freqHint.textContent = '';
+  }
+
+  // 應發 vs 實領：差額就是被扣掉的稅費，讓使用者確認數字沒填錯
+  const perUnit = parseNum($('d-perunit').value);
+  const units = parseNum($('d-units').value);
+  const received = parseNum($('d-received').value);
+  const gross = perUnit * units;
+  const taxHint = $('d-tax-hint');
+
+  if (gross > 0) {
+    const diff = gross - received;
+    let text;
+    if (!received) text = `應發約 ${fmtMoney(gross)}`;
+    else if (diff > 0.5) text = `應發 ${fmtMoney(gross)}，被扣 ${fmtMoney(diff)}（稅費）`;
+    // 實領比應發多，通常是哪個數字填錯了 —— 講出來讓人回頭看一眼
+    else if (diff < -0.5) text = `應發 ${fmtMoney(gross)}，實領多了 ${fmtMoney(-diff)}，確認一下`;
+    else text = `應發 ${fmtMoney(gross)}，全額入帳`;
+
+    taxHint.textContent = text;
+    taxHint.classList.add('is-calc');
+  } else {
+    taxHint.textContent = '';
+    taxHint.classList.remove('is-calc');
+  }
+}
+
+function submitDividend() {
+  const instrumentId = $('d-instrument').value;
+  if (!instrumentId || instrumentId === '__new') return showError('dividend-error', '請選擇標的');
+
+  const payDate = $('d-paydate').value;
+  if (!payDate) return showError('dividend-error', '請填發放日');
+
+  const received = parseNum($('d-received').value);
+  if (!received) return showError('dividend-error', '請填實領金額');
+
+  const inst = instrumentById(instrumentId);
+  const record = {
+    id: state.editing ? state.editing.id : uuid(),
+    instrumentId,
+    code: inst ? (inst.code || inst.name) : '',
+    style: inst && inst.type === FUND ? (chipValue('d-style-chips', 'dstyle') || '小額') : '',
+    exDate: $('d-exdate').value || '',
+    payDate,
+    perUnit: parseNum($('d-perunit').value),
+    units: parseNum($('d-units').value),
+    received,
+    note: $('d-note').value.trim(),
+  };
+
+  upsert('dividends', record);
+  closeSheet();
+  toast('記下配息');
+}
+
+/* ==========================================================================
+   入金 / 出金表單
+   ========================================================================== */
+
+function openCashSheet({ category, record = null }) {
+  state.draft = { category };
+  state.editing = record ? { entity: 'cashflows', id: record.id } : null;
+
+  $('cash-sheet-title').textContent = '入金出金';
+  $('btn-cash-delete').hidden = !record;
+  showError('cash-error', '');
+
+  const account = record ? record.account : ACCOUNT_OF[category] || '券商';
+  setChips('c-account-chips', 'account', account);
+  setChips('c-action-chips', 'cashaction', record ? record.action : '存入');
+
+  if (record) {
+    $('c-date').value = record.date === PRE ? '' : record.date;
+    $('c-initial').checked = record.date === PRE;
+    $('c-amount').value = fmtNum(record.amount, 2);
+    $('c-note').value = record.note || '';
+  } else {
+    $('c-date').value = todayStr();
+    $('c-initial').checked = false;
+    $('c-amount').value = '';
+    $('c-note').value = '';
+  }
+
+  syncInitialToggle('c-initial', 'c-date');
+  openSheet('cash-sheet');
+}
+
+function submitCash() {
+  const isInitial = $('c-initial').checked;
+  const date = isInitial ? PRE : $('c-date').value;
+  if (!date) return showError('cash-error', '請選日期');
+
+  const amount = parseNum($('c-amount').value);
+  if (!amount) return showError('cash-error', '請填金額');
+
+  const record = {
+    id: state.editing ? state.editing.id : uuid(),
+    date,
+    account: chipValue('c-account-chips', 'account') || '券商',
+    action: chipValue('c-action-chips', 'cashaction') || '存入',
+    amount,
+    note: $('c-note').value.trim(),
+  };
+
+  upsert('cashflows', record);
+  closeSheet();
+  toast(record.action === '存入' ? '記下存入' : '記下提領');
+}
+
+/* ==========================================================================
+   標的表單
+   ========================================================================== */
+
+function openInstrumentSheet({ type, record = null, returnTo = null }) {
+  state.draft = { returnTo };
+  state.editing = record ? { entity: 'instruments', id: record.id } : null;
+
+  $('instrument-sheet-title').textContent = record ? '編輯標的' : '新增標的';
+  $('btn-instrument-delete').hidden = !record;
+  $('i-status-field').hidden = !record;
+  showError('instrument-error', '');
+
+  setChips('i-type-chips', 'type', record ? record.type : (type || ETF));
+  setChips('i-freq-chips', 'freq', record ? (record.frequency || '季配') : '季配');
+  setChips('i-status-chips', 'status', record ? (record.status || '持有中') : '持有中');
+
+  $('i-code').value = record ? (record.code || '') : '';
+  $('i-name').value = record ? (record.name || '') : '';
+
+  openSheet('instrument-sheet');
+}
+
+function submitInstrument() {
+  const name = $('i-name').value.trim();
+  if (!name) return showError('instrument-error', '請填名稱');
+
+  const record = {
+    id: state.editing ? state.editing.id : uuid(),
+    code: $('i-code').value.trim(),
+    name,
+    type: chipValue('i-type-chips', 'type') || ETF,
+    frequency: chipValue('i-freq-chips', 'freq') || '',
+    status: state.editing ? (chipValue('i-status-chips', 'status') || '持有中') : '持有中',
+    note: '',
+  };
+
+  const returnTo = state.draft.returnTo;
+  upsert('instruments', record);
+  closeSheet();
+
+  // 從交易或配息表單按「＋ 新增標的」進來的，存完就回去並自動選好
+  if (returnTo === 'trade') {
+    openTradeSheet({ category: record.type, action: state.draft.action || BUY });
+    fillInstrumentSelect('t-instrument', record.type, record.id);
+  } else if (returnTo === 'dividend') {
+    openDividendSheet({ category: record.type });
+    fillInstrumentSelect('d-instrument', record.type, record.id);
+    autofillUnits();
+    updateDividendHints();
+  } else {
+    toast('標的已儲存');
+  }
+}
+
+function deleteInstrument(id) {
+  const used = live('trades').some((t) => t.instrumentId === id)
+    || live('dividends').some((d) => d.instrumentId === id);
+
+  if (used) {
+    toast('這個標的還有紀錄，請改成「已出清」');
+    return;
+  }
+  remove('instruments', id);
+  remove('prices', id);
+  closeSheet();
+  toast('標的已刪除');
+}
+
+/* ==========================================================================
+   現價表單
+   ========================================================================== */
+
+function openPriceSheet(instrumentId) {
+  const inst = instrumentById(instrumentId);
+  if (!inst) return;
+
+  state.draft = { priceId: instrumentId };
+  state.editing = null;
+  showError('price-error', '');
+
+  const isETF = inst.type === ETF;
+  $('p-name').textContent = inst.code ? `${inst.code} ${inst.name}` : inst.name;
+  $('p-label').textContent = isETF ? '現在股價' : '最新淨值';
+  $('p-hint').textContent = isETF
+    ? '看券商 App 或股價網站的收盤價'
+    : '看銀行對帳單或基金平台的最新淨值';
+
+  const row = priceRow(instrumentId);
+  $('p-price').value = row && row.price ? fmtNum(row.price, 6) : '';
+
+  // 只有填了代號的 ETF 抓得到報價
+  $('btn-fetch-price').hidden = !(isETF && String(inst.code || '').trim());
+  $('p-hint').classList.remove('is-calc');
+
+  openSheet('price-sheet');
+}
+
+function submitPrice() {
+  const instrumentId = state.draft.priceId;
+  const price = parseNum($('p-price').value);
+  if (!price) return showError('price-error', '請填價格');
+
+  const inst = instrumentById(instrumentId);
+  upsert('prices', {
+    id: instrumentId,
+    code: inst ? (inst.code || inst.name) : '',
+    price,
+  });
+
+  closeSheet();
+  toast('已更新');
+}
+
+/* ==========================================================================
+   自動抓現價
+
+   瀏覽器不能直接抓證交所（跨網域會被擋），所以繞到自己的 Apps Script 代抓。
+   基金沒有公開的淨值 API，維持手動填。
+   ========================================================================== */
+
+async function fetchQuotes(codes) {
+  if (!state.apiUrl) throw new Error('請先到設定連線試算表');
+  if (!navigator.onLine) throw new Error('目前離線，連不到報價');
+  const data = await apiCall({ action: 'quotes', codes });
+  return data.quotes || {};
+}
+
+/** 目前持有、而且填了代號的 ETF —— 沒代號查不了，沒持股也不需要 */
+function quotableEtfs() {
+  return heldPositions()
+    .filter((p) => p.type === ETF)
+    .map((p) => p.instrument);
+}
+
+async function refreshEtfPrices() {
+  const all = quotableEtfs();
+  const targets = all.filter((i) => String(i.code || '').trim());
+
+  if (!targets.length) {
+    toast(all.length ? '請先幫 ETF 填代號' : '沒有持有中的 ETF');
+    return;
+  }
+
+  const btn = $('btn-refresh-prices');
+  btn.disabled = true;
+  $('quote-btn-text').textContent = '查詢中…';
+
+  try {
+    const quotes = await fetchQuotes(targets.map((i) => i.code));
+
+    const failed = [];
+    let updated = 0;
+    let source = '';
+    let time = '';
+
+    for (const inst of targets) {
+      const quote = quotes[String(inst.code).trim().toUpperCase()];
+      if (!quote || !quote.price) {
+        failed.push(inst.code);
+        continue;
+      }
+      upsert('prices', {
+        id: inst.id,
+        code: inst.code,
+        price: quote.price,
+        updatedAt: new Date().toISOString(),
+      }, { flush: false });
+      updated++;
+      source = source || quote.source || '';
+      time = time || quote.time || '';
+    }
+
+    flushChanges();
+
+    if (!updated) {
+      toast(`查不到報價：${failed.join('、')}`);
+    } else if (failed.length) {
+      toast(`更新 ${updated} 檔，查不到 ${failed.join('、')}`);
+    } else {
+      toast(`已更新 ${updated} 檔 · ${source}${time ? ` ${time}` : ''}`);
+    }
+  } catch (err) {
+    toast(err.message || '查詢失敗');
+  } finally {
+    btn.disabled = false;
+    $('quote-btn-text').textContent = '更新 ETF 現價';
+    renderHoldings();
+  }
+}
+
+/** 現價表單裡的單檔抓取 */
+async function fetchOnePrice() {
+  const inst = instrumentById(state.draft.priceId);
+  if (!inst) return;
+
+  const code = String(inst.code || '').trim();
+  if (!code) return showError('price-error', '這檔沒有填代號，請手動輸入價格');
+
+  const btn = $('btn-fetch-price');
+  btn.disabled = true;
+  $('fetch-price-text').textContent = '查詢中…';
+  showError('price-error', '');
+
+  try {
+    const quotes = await fetchQuotes([code]);
+    const quote = quotes[code.toUpperCase()];
+    if (!quote || !quote.price) {
+      showError('price-error', `查不到 ${code} 的報價，請手動輸入`);
+      return;
+    }
+    $('p-price').value = fmtNum(quote.price, 4);
+    $('p-hint').textContent = `${quote.source}${quote.time ? ` · ${quote.time}` : ''}`;
+    $('p-hint').classList.add('is-calc');
+  } catch (err) {
+    showError('price-error', err.message || '查詢失敗');
+  } finally {
+    btn.disabled = false;
+    $('fetch-price-text').textContent = '自動抓取';
+  }
+}
+
+/* ==========================================================================
+   寫入（本機先行，再排隊同步）
+   ========================================================================== */
+
+/** 存檔、重畫、排隊同步。批次寫入時最後呼叫一次就好 */
+function flushChanges() {
+  saveLocal();
+  render();
+  refreshSyncChip();
+  sync();
+}
+
+function upsert(entity, record, { flush = true } = {}) {
+  const list = state[entity];
+  const index = list.findIndex((r) => r.id === record.id);
+
+  if (index === -1) {
+    list.push({ ...record, _op: 'create', createdAt: new Date().toISOString() });
+  } else {
+    const existing = list[index];
+    list[index] = {
+      ...existing,
+      ...record,
+      _op: existing._op === 'create' ? 'create' : 'update',
+    };
+  }
+
+  if (flush) flushChanges();
+}
+
+function remove(entity, id) {
+  const list = state[entity];
+  const index = list.findIndex((r) => r.id === id);
+  if (index === -1) return;
+
+  if (!list[index]._synced) {
+    // 還沒上傳過，直接從本機拿掉就好
+    list.splice(index, 1);
+  } else {
+    list[index]._op = 'delete';
+  }
+
+  flushChanges();
+}
+
+/* ==========================================================================
+   編輯既有紀錄
+   ========================================================================== */
+
+function editEntry(entity, id) {
+  const record = state[entity].find((r) => r.id === id);
+  if (!record) return;
+
+  if (entity === 'trades') {
+    const inst = instrumentById(record.instrumentId);
+    openTradeSheet({
+      category: inst ? inst.type : ETF,
+      action: record.action === SELL ? SELL : BUY,
+      record,
+    });
+  } else if (entity === 'dividends') {
+    const inst = instrumentById(record.instrumentId);
+    openDividendSheet({ category: inst ? inst.type : ETF, record });
+  } else if (entity === 'cashflows') {
+    openCashSheet({ category: record.account === '基金' ? FUND : ETF, record });
+  }
+}
+
+function deleteEditing(entity) {
+  if (!state.editing || state.editing.entity !== entity) return;
+  remove(entity, state.editing.id);
+  closeSheet();
+  toast('已刪除');
+}
+
+/* ==========================================================================
+   匯出
+   ========================================================================== */
+
+function downloadCsv(filename, rows) {
+  const csv = rows.map((row) => row.map((cell) => {
+    const text = String(cell === null || cell === undefined ? '' : cell);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  }).join(',')).join('\n');
+
+  // BOM：Excel 沒有它會把中文顯示成亂碼
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportTrades() {
+  const rows = [['日期', '類型', '標的', '動作', '型態', '數量', '單價', '金額', '手續費', '帳戶金額', '備註']];
+  for (const t of live('trades').sort((a, b) => sortKey(a.date).localeCompare(sortKey(b.date)))) {
+    const inst = instrumentById(t.instrumentId);
+    rows.push([
+      t.date === PRE ? PRE_LABEL : t.date,
+      inst ? inst.type : '',
+      instrumentName(t.instrumentId),
+      t.action, t.style || '',
+      t.quantity, t.price, t.amount, t.fee, t.cash, t.note || '',
+    ]);
+  }
+  downloadCsv(`存錢筒-交易-${todayStr()}.csv`, rows);
+}
+
+function exportDividends() {
+  const rows = [['發放日', '除息日', '類型', '標的', '每單位配息', '持有單位', '應發金額', '實領金額', '備註']];
+  for (const d of live('dividends').sort((a, b) => sortKey(a.payDate).localeCompare(sortKey(b.payDate)))) {
+    const inst = instrumentById(d.instrumentId);
+    rows.push([
+      d.payDate, d.exDate || '',
+      inst ? inst.type : '',
+      instrumentName(d.instrumentId),
+      d.perUnit, d.units,
+      Math.round((Number(d.perUnit) || 0) * (Number(d.units) || 0) * 100) / 100,
+      d.received, d.note || '',
+    ]);
+  }
+  downloadCsv(`存錢筒-配息-${todayStr()}.csv`, rows);
+}
+
+/* ==========================================================================
+   主題
+   ========================================================================== */
+
+function applyTheme() {
+  const dark = state.theme === 'dark'
+    || (state.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  $('theme-color').setAttribute('content', dark ? '#1d1a16' : '#fbf7ee');
+}
+
+/* ==========================================================================
+   事件
+   ========================================================================== */
+
+function bindEvents() {
+  // ---- 分頁 ----
+  for (const tab of document.querySelectorAll('.tab')) {
+    tab.addEventListener('click', () => {
+      state.page = tab.dataset.page;
+      window.scrollTo(0, 0);
+      render();
+    });
+  }
+
+  $('btn-settings').addEventListener('click', () => {
+    state.page = state.page === 'settings' ? 'record' : 'settings';
+    window.scrollTo(0, 0);
+    render();
+  });
+
+  $('sync-chip').addEventListener('click', () => {
+    if (!state.apiUrl) {
+      state.page = 'settings';
+      render();
+      return;
+    }
+    sync({ silent: false });
+  });
+
+  // ---- 記錄頁 ----
+  for (const btn of document.querySelectorAll('.picker__btn')) {
+    btn.addEventListener('click', () => {
+      state.category = state.category === btn.dataset.category ? null : btn.dataset.category;
+      renderRecord();
+    });
+  }
+
+  for (const btn of document.querySelectorAll('.action')) {
+    btn.addEventListener('click', () => {
+      const category = state.category;
+      if (!category) return;
+      const action = btn.dataset.action;
+
+      if (action === 'buy') openTradeSheet({ category, action: BUY });
+      if (action === 'sell') openTradeSheet({ category, action: SELL });
+      if (action === 'dividend') openDividendSheet({ category });
+      if (action === 'cash') openCashSheet({ category });
+    });
+  }
+
+  $('recent-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.entry');
+    if (btn) editEntry(btn.dataset.entity, btn.dataset.id);
+  });
+
+  // ---- 報表頁 ----
+  $('year-bar').addEventListener('click', (e) => {
+    const btn = e.target.closest('.yearbar__btn');
+    if (!btn) return;
+    state.reportYear = Number(btn.dataset.year);
+    renderReport();
+  });
+
+  // ---- 持股頁 ----
+  $('holdings-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-price-id]');
+    if (btn) openPriceSheet(btn.dataset.priceId);
+  });
+
+  $('btn-closed-toggle').addEventListener('click', () => {
+    state.showClosed = !state.showClosed;
+    renderHoldings();
+  });
+
+  // ---- 底部面板共用 ----
+  $('scrim').addEventListener('click', () => closeSheet());
+  for (const btn of document.querySelectorAll('[data-close]')) {
+    btn.addEventListener('click', () => closeSheet());
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && openSheetId) closeSheet();
+  });
+
+  // 選項按鈕：點了就切換選中狀態
+  for (const group of document.querySelectorAll('.chips')) {
+    group.addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip || !group.contains(chip)) return;
+      for (const other of group.querySelectorAll('.chip')) other.classList.remove('is-active');
+      chip.classList.add('is-active');
+
+      if (group.id === 't-unit-chips') {
+        state.draft.unit = chip.dataset.unit;
+        recalcTrade();
+      }
+      if (group.id === 't-style-chips') state.draft.style = chip.dataset.style;
+      if (group.id === 'd-style-chips') {
+        // 換了型態，持有單位要照那一邊重新帶入
+        $('d-units').dataset.auto = '1';
+        autofillUnits();
+        updateDividendHints();
+      }
+      if (group.id === 'theme-chips') {
+        state.theme = chip.dataset.themePref;
+        localStorage.setItem(LS.theme, state.theme);
+        applyTheme();
+      }
+    });
+  }
+
+  // ---- 交易表單 ----
+  $('t-instrument').addEventListener('change', (e) => {
+    if (e.target.value === '__new') {
+      const category = state.draft.category;
+      const action = state.draft.action;
+      closeSheet(true);
+      openInstrumentSheet({ type: category, returnTo: 'trade' });
+      state.draft.action = action;
+    }
+  });
+
+  for (const id of ['t-qty', 't-price', 't-amount', 't-fee']) {
+    $(id).addEventListener('input', () => recalcTrade(id === 't-price' || id === 't-fee' ? null : id));
+  }
+  $('t-cash').addEventListener('input', () => { $('t-cash').dataset.auto = '0'; });
+
+  $('t-initial').addEventListener('change', syncTradeInitial);
+
+  $('trade-form').addEventListener('submit', (e) => { e.preventDefault(); submitTrade(); });
+  $('btn-trade-delete').addEventListener('click', () => deleteEditing('trades'));
+
+  // ---- 配息表單 ----
+  $('d-instrument').addEventListener('change', (e) => {
+    if (e.target.value === '__new') {
+      const category = state.draft.category;
+      closeSheet(true);
+      openInstrumentSheet({ type: category, returnTo: 'dividend' });
+      return;
+    }
+    autofillUnits();
+    updateDividendHints();
+  });
+
+  $('d-exdate').addEventListener('change', () => { autofillUnits(); updateDividendHints(); });
+  for (const id of ['d-perunit', 'd-received']) {
+    $(id).addEventListener('input', updateDividendHints);
+  }
+  $('d-units').addEventListener('input', () => {
+    $('d-units').dataset.auto = '0';
+    updateDividendHints();
+  });
+
+  $('dividend-form').addEventListener('submit', (e) => { e.preventDefault(); submitDividend(); });
+  $('btn-dividend-delete').addEventListener('click', () => deleteEditing('dividends'));
+
+  // ---- 資金表單 ----
+  $('c-initial').addEventListener('change', () => syncInitialToggle('c-initial', 'c-date'));
+  $('cash-form').addEventListener('submit', (e) => { e.preventDefault(); submitCash(); });
+  $('btn-cash-delete').addEventListener('click', () => deleteEditing('cashflows'));
+
+  // ---- 標的表單 ----
+  $('instrument-form').addEventListener('submit', (e) => { e.preventDefault(); submitInstrument(); });
+  $('btn-instrument-delete').addEventListener('click', () => {
+    if (state.editing) deleteInstrument(state.editing.id);
+  });
+
+  // ---- 現價 ----
+  $('price-form').addEventListener('submit', (e) => { e.preventDefault(); submitPrice(); });
+  $('btn-fetch-price').addEventListener('click', fetchOnePrice);
+  $('btn-refresh-prices').addEventListener('click', refreshEtfPrices);
+
+  // ---- 設定頁 ----
+  $('btn-add-instrument').addEventListener('click', () => openInstrumentSheet({ type: ETF }));
+
+  $('instrument-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-instrument-id]');
+    if (!btn) return;
+    const record = instrumentById(btn.dataset.instrumentId);
+    if (record) openInstrumentSheet({ record });
+  });
+
+  $('btn-save-api').addEventListener('click', async () => {
+    state.apiUrl = $('api-url').value.trim();
+    state.secret = $('api-secret').value.trim();
+    localStorage.setItem(LS.apiUrl, state.apiUrl);
+    localStorage.setItem(LS.secret, state.secret);
+
+    $('api-status').textContent = '測試中…';
+    const ok = await sync({ silent: false });
+    $('api-status').textContent = ok
+      ? '連線成功，資料已同步'
+      : (state.lastError ? `連線失敗：${state.lastError.message}` : '連線失敗');
+  });
+
+  $('btn-sync-now').addEventListener('click', () => sync({ silent: false }));
+  $('btn-export-trades').addEventListener('click', exportTrades);
+  $('btn-export-dividends').addEventListener('click', exportDividends);
+
+  // ---- 系統 ----
+  window.addEventListener('online', () => sync());
+  window.addEventListener('offline', refreshSyncChip);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (state.theme === 'auto') applyTheme();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) sync();
+  });
+}
+
+/* ==========================================================================
+   啟動
+   ========================================================================== */
+
+function init() {
+  loadLocal();
+  applyTheme();
+  bindEvents();
+  render();
+  refreshSyncChip();
+
+  if (state.apiUrl) sync();
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => { /* 沒註冊成功也不影響使用 */ });
+    });
+  }
+}
+
+init();

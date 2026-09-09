@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>存錢筒</title>
+<meta name="description" content="記錄 ETF 與基金的買賣、配息與資金進出，資料存進 Google 試算表">
+<meta name="theme-color" id="theme-color" content="#fbf7ee">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="存錢筒">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+<script>
+/* 主題要在畫面畫出來之前就決定好，否則會先閃一下淺色再變深色。
+   預設淺色；選了「跟隨系統」才去問系統偏好。 */
+(function () {
+  try {
+    var pref = localStorage.getItem('pb.theme') || 'light';
+    var dark = pref === 'dark' || (pref === 'auto' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  } catch (e) {
+    document.documentElement.dataset.theme = 'light';
+  }
+})();
+</script>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ========== 頂部 ========== -->
+  <header class="topbar">
+    <div class="topbar__row">
+      <h1 class="topbar__title" id="topbar-title">存錢筒</h1>
+      <div class="topbar__actions">
+        <button class="sync-chip" id="sync-chip" type="button" aria-live="polite">
+          <span class="sync-chip__dot"></span>
+          <span class="sync-chip__text" id="sync-text">尚未設定</span>
+        </button>
+        <button class="icon-btn" id="btn-settings" type="button" aria-label="設定">
+          <svg viewBox="0 0 24 24" width="21" height="21" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2L5.6 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========== 內容 ========== -->
+  <main class="main" id="main">
+
+    <!-- ---------- 分頁 1：記錄 ---------- -->
+    <section class="page" id="page-record" aria-label="記錄">
+
+      <!-- 摘要 -->
+      <div class="summary">
+        <div class="summary__main">
+          <span class="summary__label" id="summary-label">今年配息</span>
+          <strong class="summary__value" id="summary-total">$0</strong>
+        </div>
+        <div class="summary__side">
+          <span class="summary__label">平均每月</span>
+          <strong class="summary__sub" id="summary-avg">$0</strong>
+        </div>
+      </div>
+
+      <!-- 第一層：選類別 -->
+      <p class="section-title">要記錄什麼？</p>
+      <div class="picker">
+        <button class="picker__btn picker__btn--etf" data-category="ETF" type="button">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+            <path d="M4 17.5l5-5 3.5 3.5L20 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M15 8h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>ETF</span>
+        </button>
+        <button class="picker__btn picker__btn--fund" data-category="基金" type="button">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 3.8v8.2l5.8 5.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>基金</span>
+        </button>
+      </div>
+
+      <!-- 第二層：選動作（選了類別才出現） -->
+      <div class="actions" id="actions" hidden>
+        <p class="section-title section-title--tight" id="actions-title">ETF</p>
+        <div class="actions__grid">
+          <button class="action" data-action="buy" type="button">
+            <span class="action__mark action__mark--buy" aria-hidden="true">＋</span>
+            <span>買進</span>
+          </button>
+          <button class="action" data-action="sell" type="button">
+            <span class="action__mark action__mark--sell" aria-hidden="true">－</span>
+            <span>賣出</span>
+          </button>
+          <button class="action" data-action="dividend" type="button">
+            <span class="action__mark action__mark--div" aria-hidden="true">$</span>
+            <span>配息</span>
+          </button>
+          <button class="action" data-action="cash" type="button">
+            <span class="action__mark action__mark--cash" aria-hidden="true">⇅</span>
+            <span>入金出金</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 最近紀錄 -->
+      <p class="section-title" id="recent-title">最近紀錄</p>
+      <div class="entries" id="recent-list"></div>
+
+      <div class="empty" id="record-empty" hidden>
+        <div class="empty__icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" width="56" height="56" fill="none">
+            <path d="M8 22c0-6 6-10 13-10s13 4 13 10c0 3-1.4 5.6-3.7 7.4V35h-4.6v-3h-9.4v3H11v-6.2C9.2 27.2 8 24.8 8 22z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M34 20l5-2v7l-4-1" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+            <circle cx="15" cy="21" r="1.6" fill="currentColor"/>
+            <path d="M20 12c0-2.2 1.8-4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="empty__title">還沒有任何紀錄</p>
+        <p class="empty__hint">選 ETF 或基金，記下第一筆</p>
+      </div>
+    </section>
+
+    <!-- ---------- 分頁 2：報表 ---------- -->
+    <section class="page" id="page-report" aria-label="報表" hidden>
+
+      <div class="yearbar" id="year-bar"></div>
+
+      <div class="card">
+        <h2 class="card__title">配息</h2>
+        <div class="stat-row">
+          <div class="stat">
+            <span class="stat__label">全年累積</span>
+            <strong class="stat__value" id="rp-total">$0</strong>
+          </div>
+          <div class="stat">
+            <span class="stat__label" id="rp-avg-label">平均每月</span>
+            <strong class="stat__value" id="rp-avg">$0</strong>
+          </div>
+        </div>
+        <div class="split">
+          <div class="split__item split__item--etf">
+            <span>ETF</span><strong id="rp-etf">$0</strong>
+          </div>
+          <div class="split__item split__item--fund">
+            <span>基金</span><strong id="rp-fund">$0</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card__title">每月配息</h2>
+        <div class="chart" id="chart"></div>
+        <div class="legend">
+          <span class="legend__item"><i class="legend__swatch legend__swatch--etf"></i>ETF</span>
+          <span class="legend__item"><i class="legend__swatch legend__swatch--fund"></i>基金</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card__title">帳戶餘額</h2>
+        <p class="card__sub">存入 − 提領 ＋ 賣出 ＋ 配息 − 買進</p>
+        <div class="kv"><span>券商（ETF）</span><strong id="bal-etf">$0</strong></div>
+        <div class="kv"><span>基金平台</span><strong id="bal-fund">$0</strong></div>
+      </div>
+
+      <div class="card">
+        <h2 class="card__title">投入與損益</h2>
+        <p class="card__sub">全期間累計，不分年份</p>
+        <div class="kv"><span>累計投入成本</span><strong id="rp-cost">$0</strong></div>
+        <div class="kv"><span>目前市值</span><strong id="rp-value">$0</strong></div>
+        <div class="kv"><span>未實現損益</span><strong id="rp-unreal">$0</strong></div>
+        <div class="kv"><span>已實現損益</span><strong id="rp-real">$0</strong></div>
+        <div class="split" id="rp-real-split" hidden>
+          <div class="split__item split__item--etf"><span>ETF</span><strong id="rp-real-etf">$0</strong></div>
+          <div class="split__item split__item--fund"><span>基金</span><strong id="rp-real-fund">$0</strong></div>
+        </div>
+        <div class="kv"><span>累計配息</span><strong id="rp-alldiv">$0</strong></div>
+        <p class="hint" id="rp-price-hint" hidden></p>
+      </div>
+    </section>
+
+    <!-- ---------- 分頁 3：持股 ---------- -->
+    <section class="page" id="page-holdings" aria-label="持股" hidden>
+
+      <div class="totals" id="holdings-totals">
+        <div class="totals__row">
+          <span>市值</span><strong id="hd-value">$0</strong>
+        </div>
+        <div class="totals__row">
+          <span>成本</span><strong id="hd-cost">$0</strong>
+        </div>
+        <div class="totals__row totals__row--main">
+          <span>未實現損益</span><strong id="hd-pl">$0</strong>
+        </div>
+      </div>
+
+      <div class="quote-bar" id="quote-bar" hidden>
+        <button class="btn btn--quote" id="btn-refresh-prices" type="button">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">
+            <path d="M20 12a8 8 0 11-2.6-5.9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M20 4v4.5h-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span id="quote-btn-text">更新 ETF 現價</span>
+        </button>
+        <span class="quote-bar__hint" id="quote-hint"></span>
+      </div>
+
+      <div class="holdings" id="holdings-list"></div>
+
+      <!-- 已出清：每一段持有回合各自一列，出清後又買回來的會有多列 -->
+      <div class="closed" id="closed-section" hidden>
+        <button class="closed__toggle" id="btn-closed-toggle" type="button" aria-expanded="false">
+          <span id="closed-title">已出清</span>
+          <svg class="closed__caret" viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+            <path d="M7 10l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="closed__list" id="closed-list" hidden></div>
+      </div>
+
+      <div class="empty" id="holdings-empty" hidden>
+        <div class="empty__icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" width="56" height="56" fill="none">
+            <path d="M8 34V22M18 34V14M28 34V26M38 34V18" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="empty__title">還沒有持股</p>
+        <p class="empty__hint">到「記錄」記下第一筆買進</p>
+      </div>
+    </section>
+
+    <!-- ---------- 設定（不佔分頁，從右上角齒輪進） ---------- -->
+    <section class="page" id="page-settings" aria-label="設定" hidden>
+
+      <div class="card">
+        <h2 class="card__title">Google 試算表連線</h2>
+        <p class="card__sub">貼上 Apps Script 部署後產生的網址（結尾是 /exec）</p>
+        <input class="input" id="api-url" type="url" inputmode="url"
+               placeholder="https://script.google.com/macros/s/.../exec"
+               autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input class="input" id="api-secret" type="text"
+               placeholder="通關密語（與後端 SECRET 相同）"
+               autocomplete="off" autocapitalize="off" spellcheck="false"
+               style="margin-top:8px">
+        <div class="row-btns">
+          <button class="btn btn--primary" id="btn-save-api" type="button">儲存並測試</button>
+          <button class="btn" id="btn-sync-now" type="button">立即同步</button>
+        </div>
+        <p class="hint" id="api-status"></p>
+      </div>
+
+      <div class="card">
+        <h2 class="card__title">標的</h2>
+        <p class="card__sub">記錄時也可以當場新增，這裡用來改名或設為已出清</p>
+        <div class="chip-list" id="instrument-list"></div>
+        <div class="row-btns">
+          <button class="btn" id="btn-add-instrument" type="button">＋ 新增標的</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card__title">外觀</h2>
+        <p class="card__sub">預設是淺色，晚上想護眼再切深色</p>
+        <div class="chips" id="theme-chips">
+          <button class="chip" type="button" data-theme-pref="light">淺色</button>
+          <button class="chip" type="button" data-theme-pref="dark">深色</button>
+          <button class="chip" type="button" data-theme-pref="auto">跟隨系統</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card__title">資料</h2>
+        <div class="kv"><span>標的</span><strong id="stat-instruments">0</strong></div>
+        <div class="kv"><span>交易</span><strong id="stat-trades">0</strong></div>
+        <div class="kv"><span>配息</span><strong id="stat-dividends">0</strong></div>
+        <div class="kv"><span>資金</span><strong id="stat-cashflows">0</strong></div>
+        <div class="kv"><span>待同步</span><strong id="stat-pending">0</strong></div>
+        <div class="kv"><span>最後同步</span><strong id="stat-lastsync">—</strong></div>
+        <div class="row-btns">
+          <button class="btn" id="btn-export-trades" type="button">匯出交易</button>
+          <button class="btn" id="btn-export-dividends" type="button">匯出配息</button>
+        </div>
+      </div>
+
+      <p class="version">存錢筒 · 資料存於你的 Google 試算表</p>
+    </section>
+
+  </main>
+
+  <!-- ========== 底部分頁 ========== -->
+  <nav class="tabbar" role="tablist">
+    <button class="tab is-active" data-page="record" role="tab" aria-selected="true" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+        <path d="M5 4h14v16H5z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M9 9h6M9 13h6M9 17h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>記錄</span>
+    </button>
+    <button class="tab" data-page="report" role="tab" aria-selected="false" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+        <path d="M5 19V11M12 19V5M19 19v-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+      <span>報表</span>
+    </button>
+    <button class="tab" data-page="holdings" role="tab" aria-selected="false" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+        <rect x="3" y="7" width="18" height="12" rx="2" stroke="currentColor" stroke-width="2"/>
+        <path d="M8 7V5.5A1.5 1.5 0 019.5 4h5A1.5 1.5 0 0116 5.5V7" stroke="currentColor" stroke-width="2"/>
+        <path d="M3 12h18" stroke="currentColor" stroke-width="2"/>
+      </svg>
+      <span>持股</span>
+    </button>
+  </nav>
+
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<!-- ========== 買進 / 賣出 ========== -->
+<div class="sheet" id="trade-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="trade-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">取消</button>
+    <h2 class="sheet__title" id="trade-sheet-title">買進</h2>
+    <button class="sheet__del" id="btn-trade-delete" type="button" hidden>刪除</button>
+  </div>
+
+  <form class="sheet__body" id="trade-form" novalidate>
+
+    <label class="field">
+      <span class="field__label">標的<span class="field__req">必填</span></span>
+      <select class="input" id="t-instrument" required></select>
+    </label>
+
+    <div class="field">
+      <span class="field__label">日期</span>
+      <input class="input input--date" id="t-date" type="date">
+      <label class="toggle toggle--inline">
+        <input type="checkbox" id="t-initial">
+        <span class="toggle__box" aria-hidden="true"></span>
+        <span>2025 之前（期初持有）</span>
+      </label>
+      <span class="field__hint" id="t-initial-hint" hidden>
+        這筆只用來讓持有數量與平均成本正確，不列入月份統計，也不會扣帳戶餘額。
+      </span>
+    </div>
+
+    <div class="field" id="t-style-field" hidden>
+      <span class="field__label">型態</span>
+      <div class="chips" id="t-style-chips">
+        <button class="chip" type="button" data-style="小額">小額（定期定額）</button>
+        <button class="chip" type="button" data-style="單筆">單筆</button>
+      </div>
+    </div>
+
+    <!-- 三個數字欄位。順序與標籤依 ETF / 基金切換，由 app.js 設定 -->
+    <label class="field" id="t-amount-field" style="order:1">
+      <span class="field__label" id="t-amount-label">金額</span>
+      <input class="input" id="t-amount" type="text" inputmode="decimal" autocomplete="off">
+      <span class="field__hint" id="t-amount-hint"></span>
+    </label>
+
+    <label class="field" id="t-price-field" style="order:2">
+      <span class="field__label" id="t-price-label">單價</span>
+      <input class="input" id="t-price" type="text" inputmode="decimal" autocomplete="off">
+    </label>
+
+    <label class="field" id="t-qty-field" style="order:3">
+      <span class="field__label" id="t-qty-label">數量</span>
+      <div class="field-row">
+        <input class="input field--grow" id="t-qty" type="text" inputmode="decimal" autocomplete="off">
+        <div class="chips chips--unit" id="t-unit-chips">
+          <button class="chip" type="button" data-unit="股">股</button>
+          <button class="chip" type="button" data-unit="張">張</button>
+        </div>
+      </div>
+      <span class="field__hint" id="t-qty-hint"></span>
+    </label>
+
+    <label class="field" style="order:4">
+      <span class="field__label">手續費<span class="field__opt">選填</span></span>
+      <input class="input" id="t-fee" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
+      <span class="field__hint">算進成本，不影響部位價值</span>
+    </label>
+
+    <label class="field" style="order:5">
+      <span class="field__label" id="t-cash-label">帳戶實扣</span>
+      <input class="input" id="t-cash" type="text" inputmode="decimal" autocomplete="off">
+      <span class="field__hint" id="t-cash-hint">自動帶入，改成銀行實際的數字最準</span>
+    </label>
+
+    <label class="field" style="order:6">
+      <span class="field__label">備註<span class="field__opt">選填</span></span>
+      <input class="input" id="t-note" type="text" maxlength="60" autocomplete="off">
+    </label>
+
+    <p class="form-error" id="trade-error" hidden style="order:7"></p>
+    <button class="btn btn--submit" type="submit" style="order:8">儲存</button>
+  </form>
+</div>
+
+<!-- ========== 配息 ========== -->
+<div class="sheet" id="dividend-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="dividend-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">取消</button>
+    <h2 class="sheet__title" id="dividend-sheet-title">配息</h2>
+    <button class="sheet__del" id="btn-dividend-delete" type="button" hidden>刪除</button>
+  </div>
+
+  <form class="sheet__body" id="dividend-form" novalidate>
+
+    <label class="field">
+      <span class="field__label">標的<span class="field__req">必填</span></span>
+      <select class="input" id="d-instrument" required></select>
+      <span class="field__hint" id="d-freq-hint"></span>
+    </label>
+
+    <div class="field" id="d-style-field" hidden>
+      <span class="field__label">型態</span>
+      <div class="chips" id="d-style-chips">
+        <button class="chip" type="button" data-dstyle="小額">小額（定期定額）</button>
+        <button class="chip" type="button" data-dstyle="單筆">單筆</button>
+      </div>
+      <span class="field__hint">單筆和定期定額的配息是分開發的，各記各的</span>
+    </div>
+
+    <div class="field-row">
+      <label class="field field--grow">
+        <span class="field__label">除息日</span>
+        <input class="input input--date" id="d-exdate" type="date">
+      </label>
+      <label class="field field--grow">
+        <span class="field__label">發放日<span class="field__req">必填</span></span>
+        <input class="input input--date" id="d-paydate" type="date" required>
+      </label>
+    </div>
+    <p class="field__hint field__hint--row">月份統計以發放日為準</p>
+
+    <label class="field">
+      <span class="field__label">每單位配息</span>
+      <input class="input" id="d-perunit" type="text" inputmode="decimal" autocomplete="off">
+    </label>
+
+    <label class="field">
+      <span class="field__label">持有單位</span>
+      <input class="input" id="d-units" type="text" inputmode="decimal" autocomplete="off">
+      <span class="field__hint" id="d-units-hint">依除息日的持有量自動帶入</span>
+    </label>
+
+    <label class="field">
+      <span class="field__label">實領金額<span class="field__req">必填</span></span>
+      <input class="input" id="d-received" type="text" inputmode="decimal" autocomplete="off" required>
+      <span class="field__hint" id="d-tax-hint"></span>
+    </label>
+
+    <label class="field">
+      <span class="field__label">備註<span class="field__opt">選填</span></span>
+      <input class="input" id="d-note" type="text" maxlength="60" autocomplete="off">
+    </label>
+
+    <p class="form-error" id="dividend-error" hidden></p>
+    <button class="btn btn--submit" type="submit">儲存</button>
+  </form>
+</div>
+
+<!-- ========== 入金 / 出金 ========== -->
+<div class="sheet" id="cash-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="cash-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">取消</button>
+    <h2 class="sheet__title" id="cash-sheet-title">入金出金</h2>
+    <button class="sheet__del" id="btn-cash-delete" type="button" hidden>刪除</button>
+  </div>
+
+  <form class="sheet__body" id="cash-form" novalidate>
+
+    <div class="field">
+      <span class="field__label">帳戶</span>
+      <div class="chips" id="c-account-chips">
+        <button class="chip" type="button" data-account="券商">券商（ETF）</button>
+        <button class="chip" type="button" data-account="基金">基金平台</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="field__label">動作</span>
+      <div class="chips" id="c-action-chips">
+        <button class="chip" type="button" data-cashaction="存入">存入</button>
+        <button class="chip" type="button" data-cashaction="提領">提領</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="field__label">日期</span>
+      <input class="input input--date" id="c-date" type="date">
+      <label class="toggle toggle--inline">
+        <input type="checkbox" id="c-initial">
+        <span class="toggle__box" aria-hidden="true"></span>
+        <span>2025 之前（期初餘額）</span>
+      </label>
+    </div>
+
+    <label class="field">
+      <span class="field__label">金額<span class="field__req">必填</span></span>
+      <input class="input" id="c-amount" type="text" inputmode="decimal" autocomplete="off" required>
+    </label>
+
+    <label class="field">
+      <span class="field__label">備註<span class="field__opt">選填</span></span>
+      <input class="input" id="c-note" type="text" maxlength="60" autocomplete="off">
+    </label>
+
+    <p class="form-error" id="cash-error" hidden></p>
+    <button class="btn btn--submit" type="submit">儲存</button>
+  </form>
+</div>
+
+<!-- ========== 新增 / 編輯標的 ========== -->
+<div class="sheet" id="instrument-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="instrument-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">取消</button>
+    <h2 class="sheet__title" id="instrument-sheet-title">新增標的</h2>
+    <button class="sheet__del" id="btn-instrument-delete" type="button" hidden>刪除</button>
+  </div>
+
+  <form class="sheet__body" id="instrument-form" novalidate>
+
+    <div class="field">
+      <span class="field__label">類型</span>
+      <div class="chips" id="i-type-chips">
+        <button class="chip" type="button" data-type="ETF">ETF</button>
+        <button class="chip" type="button" data-type="基金">基金</button>
+      </div>
+    </div>
+
+    <label class="field">
+      <span class="field__label">代號</span>
+      <input class="input" id="i-code" type="text" maxlength="20" autocomplete="off"
+             autocapitalize="characters" placeholder="0056">
+      <span class="field__hint">基金沒有代號可以留空</span>
+    </label>
+
+    <label class="field">
+      <span class="field__label">名稱<span class="field__req">必填</span></span>
+      <input class="input" id="i-name" type="text" maxlength="40" autocomplete="off"
+             placeholder="元大高股息" required>
+    </label>
+
+    <div class="field">
+      <span class="field__label">配息頻率</span>
+      <div class="chips chips--wrap" id="i-freq-chips">
+        <button class="chip" type="button" data-freq="月配">月配</button>
+        <button class="chip" type="button" data-freq="季配">季配</button>
+        <button class="chip" type="button" data-freq="半年配">半年配</button>
+        <button class="chip" type="button" data-freq="年配">年配</button>
+        <button class="chip" type="button" data-freq="不配息">不配息</button>
+      </div>
+    </div>
+
+    <div class="field" id="i-status-field" hidden>
+      <span class="field__label">狀態</span>
+      <div class="chips" id="i-status-chips">
+        <button class="chip" type="button" data-status="持有中">持有中</button>
+        <button class="chip" type="button" data-status="已出清">已出清</button>
+      </div>
+    </div>
+
+    <p class="form-error" id="instrument-error" hidden></p>
+    <button class="btn btn--submit" type="submit">儲存</button>
+  </form>
+</div>
+
+<!-- ========== 更新現價 ========== -->
+<div class="sheet" id="price-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="price-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">取消</button>
+    <h2 class="sheet__title" id="price-sheet-title">更新現價</h2>
+    <span class="sheet__del" aria-hidden="true"></span>
+  </div>
+
+  <form class="sheet__body" id="price-form" novalidate>
+    <div class="field">
+      <span class="field__label">標的</span>
+      <p class="readonly-value" id="p-name">—</p>
+    </div>
+
+    <label class="field">
+      <span class="field__label" id="p-label">股價</span>
+      <input class="input" id="p-price" type="text" inputmode="decimal" autocomplete="off" required>
+      <span class="field__hint" id="p-hint"></span>
+    </label>
+
+    <button class="btn btn--quote btn--block" id="btn-fetch-price" type="button" hidden>
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">
+        <path d="M20 12a8 8 0 11-2.6-5.9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <path d="M20 4v4.5h-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span id="fetch-price-text">自動抓取</span>
+    </button>
+
+    <p class="form-error" id="price-error" hidden></p>
+    <button class="btn btn--submit" type="submit">儲存</button>
+  </form>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
