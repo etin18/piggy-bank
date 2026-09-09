@@ -364,11 +364,13 @@
     </div>
 
     <!-- 三個數字欄位。順序與標籤依 ETF / 基金切換，由 app.js 設定 -->
-    <label class="field" id="t-amount-field" style="order:1">
-      <span class="field__label" id="t-amount-label">金額</span>
+    <!-- 這格用 div 不用 label：底下的快捷按鈕若包在 label 裡，點了會連帶觸發輸入框 -->
+    <div class="field" id="t-amount-field" style="order:1">
+      <label class="field__label" id="t-amount-label" for="t-amount">金額</label>
       <input class="input" id="t-amount" type="text" inputmode="decimal" autocomplete="off">
       <span class="field__hint" id="t-amount-hint"></span>
-    </label>
+      <div class="quick" id="t-amount-quick" hidden></div>
+    </div>
 
     <label class="field" id="t-price-field" style="order:2">
       <span class="field__label" id="t-price-label">單價</span>

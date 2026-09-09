@@ -1266,8 +1266,51 @@ function openTradeSheet({ category, action, record = null }) {
   setChips('t-style-chips', 'style', state.draft.style);
   syncTradeInitial();
   updateTradeHints();
+  renderAmountQuick();
 
   openSheet('trade-sheet');
+}
+
+/**
+ * 申購金額的快捷按鈕：從過去記過的金額挑幾個出來。
+ * 定期定額每期都是同一個數字，點一下比重打快。
+ *
+ * 同一檔標的用過的排前面 —— 不同基金的每期金額往往不一樣。
+ */
+function recentAmounts(category, action, instrumentId, style, limit = 4) {
+  const trades = live('trades')
+    .filter((t) => typeOfTrade(t) === category && t.action === action && Number(t.amount) > 0)
+    // 只看同一種型態：單筆通常是幾萬，定期定額是幾千，混在一起選項就沒用了
+    .filter((t) => category !== FUND || normalizeStyle(t.style) === normalizeStyle(style))
+    .sort((a, b) => {
+      const cmp = sortKey(b.date).localeCompare(sortKey(a.date));
+      return cmp || String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+
+  const preferred = instrumentId ? trades.filter((t) => t.instrumentId === instrumentId) : [];
+
+  const out = [];
+  for (const t of [...preferred, ...trades]) {
+    const amount = Number(t.amount);
+    if (!out.includes(amount)) out.push(amount);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function renderAmountQuick() {
+  const box = $('t-amount-quick');
+  // 只有基金申購用得上：ETF 的成交金額跟著股價跑，賣出金額更不會重複
+  const useful = state.draft.category === FUND && state.draft.action === BUY;
+
+  const amounts = useful
+    ? recentAmounts(FUND, BUY, $('t-instrument').value, chipValue('t-style-chips', 'style'))
+    : [];
+
+  box.hidden = amounts.length === 0;
+  box.innerHTML = amounts
+    .map((a) => `<button class="quick__btn" type="button" data-amount="${a}">${fmtNum(a, 2)}</button>`)
+    .join('');
 }
 
 /** 期初持股不影響帳戶餘額，「帳戶實扣」那欄就沒有意義，收起來 */
@@ -1280,6 +1323,7 @@ function syncTradeInitial() {
   if (on && state.draft.category === FUND) {
     state.draft.style = '單筆';
     setChips('t-style-chips', 'style', '單筆');
+    renderAmountQuick();
   }
 }
 
@@ -2016,7 +2060,10 @@ function bindEvents() {
         state.draft.unit = chip.dataset.unit;
         recalcTrade();
       }
-      if (group.id === 't-style-chips') state.draft.style = chip.dataset.style;
+      if (group.id === 't-style-chips') {
+        state.draft.style = chip.dataset.style;
+        renderAmountQuick();   // 單筆和定期定額的常用金額不一樣
+      }
       if (group.id === 'd-style-chips') {
         // 換了型態，持有單位要照那一邊重新帶入
         $('d-units').dataset.auto = '1';
@@ -2039,7 +2086,16 @@ function bindEvents() {
       closeSheet(true);
       openInstrumentSheet({ type: category, returnTo: 'trade' });
       state.draft.action = action;
+      return;
     }
+    renderAmountQuick();   // 換了標的，常用金額跟著換
+  });
+
+  $('t-amount-quick').addEventListener('click', (e) => {
+    const btn = e.target.closest('.quick__btn');
+    if (!btn) return;
+    $('t-amount').value = fmtNum(Number(btn.dataset.amount), 2);
+    recalcTrade('t-amount');
   });
 
   for (const id of ['t-qty', 't-price', 't-amount', 't-fee']) {

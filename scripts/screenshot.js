@@ -236,7 +236,10 @@ async function run() {
   await page.waitForTimeout(200);
   await shot(page, '03-ETF買進');
 
-  await check(page, 't-amount', '', '成交金額欄位');
+  // ETF 的成交金額跟著股價跑，不該出現常用金額快捷
+  const etfQuick = await page.locator('#t-amount-quick').isVisible();
+  console.log(`  ${!etfQuick ? '✅' : '❌'} ETF 買進沒有常用金額快捷`);
+  if (etfQuick) problems.push('ETF 買進不該出現常用金額快捷');
   const autoAmount = await page.inputValue('#t-amount');
   const autoCash = await page.inputValue('#t-cash');
   const lotHint = await textOf(page, 't-qty-hint');
@@ -263,6 +266,19 @@ async function run() {
   await page.locator('.action[data-action="buy"]').click();
   await page.waitForTimeout(400);
   await page.selectOption('#t-instrument', 'i3');
+  await page.waitForTimeout(200);
+
+  const quickVisible = await page.locator('#t-amount-quick').isVisible();
+  const quickBtns = await page.locator('#t-amount-quick .quick__btn').allInnerTexts();
+  console.log(`  ${quickVisible ? '✅' : '❌'} 申購金額有常用快捷：${quickBtns.join('、')}`);
+  if (!quickVisible) problems.push('基金申購沒有出現常用金額快捷');
+
+  await page.locator('#t-amount-quick .quick__btn').first().click();
+  await page.waitForTimeout(200);
+  const quickFilled = await page.inputValue('#t-amount');
+  console.log(`  ${quickFilled === '5,000' ? '✅' : '❌'} 點了快捷後填入：${quickFilled}`);
+  if (quickFilled !== '5,000') problems.push(`快捷金額填入錯誤：${quickFilled}`);
+
   await page.fill('#t-amount', '5000');
   await page.fill('#t-price', '44.8');
   await page.fill('#t-fee', '25');

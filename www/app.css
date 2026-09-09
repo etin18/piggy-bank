@@ -1170,6 +1170,31 @@ select.input {
   font-weight: 600;
 }
 
+/* 常用值快捷：定期定額每期都是同一個金額，點一下比重打快 */
+.quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 1px;
+}
+
+.quick__btn {
+  padding: 6px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.quick__btn:active {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
+
 .chips {
   display: flex;
   gap: 7px;
