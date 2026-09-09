@@ -529,8 +529,11 @@ async function run() {
      openSheet 會先關掉明細面板，早期版本在關閉時把 state.editing 清成 null，
      於是存檔變成新增 —— 這條測試就是守著那個坑 */
   console.log('\n── 從明細編輯不能變成新增 ──');
+  // 刪掉的紀錄會先標記成 _op='delete' 留在本機等同步推上去，
+  // 所以要數的是還活著的那些，不是陣列長度
   const tradeCount = () => page.evaluate(
-    () => JSON.parse(localStorage.getItem('pb.trades') || '[]').length
+    () => JSON.parse(localStorage.getItem('pb.trades') || '[]')
+      .filter((t) => t._op !== 'delete').length
   );
   const before = await tradeCount();
 
@@ -548,6 +551,26 @@ async function run() {
   console.log(`  ${edited === 1 ? '✅' : '❌'} 備註改在原本那筆上（找到 ${edited} 筆）`);
   if (after !== before) problems.push(`從明細編輯變成新增：${before} → ${after} 筆`);
   if (edited !== 1) problems.push(`從明細編輯沒有更新到原本那筆：找到 ${edited} 筆`);
+
+  /* 刪除鍵吃的也是 state.editing，同一個坑會讓它按下去沒反應 */
+  console.log('\n── 從明細刪除 ──');
+  await page.locator('.hold__name--link').first().click();
+  await page.waitForTimeout(400);
+  await page.locator('#detail-filter .chip[data-detail="trade"]').click();
+  await page.waitForTimeout(300);
+  await page.locator('#detail-list .entry').first().click();
+  await page.waitForTimeout(500);
+
+  const deleteVisible = await page.locator('#btn-trade-delete').isVisible();
+  console.log(`  ${deleteVisible ? '✅' : '❌'} 刪除鍵看得到`);
+  if (!deleteVisible) problems.push('編輯面板沒有出現刪除鍵');
+
+  await page.locator('#btn-trade-delete').click();
+  await page.waitForTimeout(600);
+
+  const afterDelete = await tradeCount();
+  console.log(`  ${afterDelete === before - 1 ? '✅' : '❌'} 真的刪掉了：${before} → ${afterDelete}`);
+  if (afterDelete !== before - 1) problems.push(`刪除沒有生效：${before} → ${afterDelete}`);
 
   console.log('\n── 自選顯示欄位 ──');
   const cellsBefore = await page.locator('.hold').first().locator('.hold__cell').count();
