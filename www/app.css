@@ -439,6 +439,26 @@ button, input, select, textarea {
   vertical-align: 1px;
 }
 
+.more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.more:active { background: var(--surface-2); }
+.more__caret { transition: transform .18s; }
+.more.is-open .more__caret { transform: rotate(180deg); }
+
 /* ==========================================================================
    卡片 / 數據
    ========================================================================== */

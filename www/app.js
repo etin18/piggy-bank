@@ -58,6 +58,7 @@ const state = {
   category: null,        // 記錄頁選中的 ETF / 基金
   reportYear: null,
   showClosed: false,     // 持股頁的「已出清」是否展開
+  showAllRecent: false,  // 首頁的最近紀錄是否展開全部
 
   editing: null,         // { entity, id } 正在編輯的紀錄
   draft: {},             // 表單暫存：category、action、unit、style…
@@ -723,14 +724,24 @@ function renderRecord() {
   renderRecent();
 }
 
+/** 首頁預設只列這麼多，其餘收在「查看全部」後面 */
+const RECENT_LIMIT = 5;
+
 function renderRecent() {
   const list = $('recent-list');
   const entries = recentEntries();
+  const showAll = state.showAllRecent;
+  const shown = showAll ? entries : entries.slice(0, RECENT_LIMIT);
 
   $('recent-title').textContent = state.category ? `最近的${state.category}紀錄` : '最近紀錄';
   $('record-empty').hidden = entries.length > 0 || live('trades').length > 0;
 
-  list.innerHTML = entries.map(entryHtml).join('');
+  list.innerHTML = shown.map(entryHtml).join('');
+
+  const more = $('btn-recent-more');
+  more.hidden = entries.length <= RECENT_LIMIT;
+  more.classList.toggle('is-open', showAll);
+  $('recent-more-text').textContent = showAll ? '收起' : `查看全部 ${entries.length} 筆`;
 }
 
 /** 三種紀錄混在一起，照日期新的在前 */
@@ -751,13 +762,11 @@ function recentEntries() {
     out.push({ kind: 'cash', record: c, date: c.date });
   }
 
-  return out
-    .sort((a, b) => {
-      const cmp = sortKey(b.date).localeCompare(sortKey(a.date));
-      if (cmp) return cmp;
-      return String(b.record.createdAt || '').localeCompare(String(a.record.createdAt || ''));
-    })
-    .slice(0, 12);
+  return out.sort((a, b) => {
+    const cmp = sortKey(b.date).localeCompare(sortKey(a.date));
+    if (cmp) return cmp;
+    return String(b.record.createdAt || '').localeCompare(String(a.record.createdAt || ''));
+  });
 }
 
 function entryHtml(entry) {
@@ -1998,9 +2007,16 @@ function bindEvents() {
   for (const btn of document.querySelectorAll('.picker__btn')) {
     btn.addEventListener('click', () => {
       state.category = state.category === btn.dataset.category ? null : btn.dataset.category;
+      state.showAllRecent = false;   // 換了類別就收回去，不然清單長度會忽然暴增
       renderRecord();
     });
   }
+
+  $('btn-recent-more').addEventListener('click', () => {
+    state.showAllRecent = !state.showAllRecent;
+    renderRecent();
+    if (!state.showAllRecent) $('recent-title').scrollIntoView({ block: 'nearest' });
+  });
 
   for (const btn of document.querySelectorAll('.action')) {
     btn.addEventListener('click', () => {

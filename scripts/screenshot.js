@@ -220,6 +220,24 @@ async function run() {
   await check(page, 'summary-total', EXPECT['summary-total'], '今年配息');
   await check(page, 'summary-avg', EXPECT['summary-avg'], '平均每月');
 
+  console.log('\n── 最近紀錄只列 5 筆 ──');
+  const shown = await page.locator('#recent-list .entry').count();
+  const moreText = (await page.locator('#recent-more-text').innerText()).trim();
+  console.log(`  ${shown === 5 ? '✅' : '❌'} 預設顯示 ${shown} 筆`);
+  console.log(`  按鈕：${moreText}`);
+  if (shown !== 5) problems.push(`最近紀錄預設應顯示 5 筆，實際 ${shown} 筆`);
+
+  await page.locator('#btn-recent-more').click();
+  await page.waitForTimeout(300);
+  const expanded = await page.locator('#recent-list .entry').count();
+  const collapseText = (await page.locator('#recent-more-text').innerText()).trim();
+  console.log(`  ${expanded > 5 ? '✅' : '❌'} 展開後 ${expanded} 筆，按鈕變成「${collapseText}」`);
+  if (expanded <= 5) problems.push('查看全部沒有展開更多紀錄');
+  await shot(page, '01b-最近紀錄展開');
+
+  await page.locator('#btn-recent-more').click();
+  await page.waitForTimeout(300);
+
   console.log('\n── 選 ETF、展開動作 ──');
   await page.locator('.picker__btn[data-category="ETF"]').click();
   await page.waitForTimeout(200);
