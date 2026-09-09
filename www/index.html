@@ -210,8 +210,8 @@
         </div>
       </div>
 
-      <div class="quote-bar" id="quote-bar" hidden>
-        <button class="btn btn--quote" id="btn-refresh-prices" type="button">
+      <div class="hold-tools" id="hold-tools" hidden>
+        <button class="btn btn--quote" id="btn-refresh-prices" type="button" hidden>
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">
             <path d="M20 12a8 8 0 11-2.6-5.9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             <path d="M20 4v4.5h-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -219,6 +219,13 @@
           <span id="quote-btn-text">更新 ETF 現價</span>
         </button>
         <span class="quote-bar__hint" id="quote-hint"></span>
+        <button class="icon-btn icon-btn--tool" id="btn-fields" type="button" aria-label="選擇要顯示的資訊">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true">
+            <path d="M5 7h14M5 12h14M5 17h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="9" cy="7" r="2.2" fill="var(--surface-1)" stroke="currentColor" stroke-width="2"/>
+            <circle cx="15" cy="12" r="2.2" fill="var(--surface-1)" stroke="currentColor" stroke-width="2"/>
+          </svg>
+        </button>
       </div>
 
       <div class="holdings" id="holdings-list"></div>
@@ -610,6 +617,46 @@
     <p class="form-error" id="instrument-error" hidden></p>
     <button class="btn btn--submit" type="submit">儲存</button>
   </form>
+</div>
+
+<!-- ========== 標的明細：某一檔的所有紀錄 ========== -->
+<div class="sheet" id="detail-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="detail-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">關閉</button>
+    <h2 class="sheet__title" id="detail-sheet-title">標的</h2>
+    <button class="sheet__del sheet__del--plain" id="btn-detail-edit" type="button">編輯</button>
+  </div>
+
+  <div class="sheet__body">
+    <div class="detail-stats" id="detail-stats"></div>
+
+    <div class="detail-filter" id="detail-filter">
+      <button class="chip is-active" type="button" data-detail="all">全部</button>
+      <button class="chip" type="button" data-detail="trade">買賣</button>
+      <button class="chip" type="button" data-detail="dividend">配息</button>
+    </div>
+
+    <div class="entries" id="detail-list"></div>
+    <p class="detail-empty" id="detail-empty" hidden>這個篩選底下沒有紀錄</p>
+  </div>
+</div>
+
+<!-- ========== 選擇持股頁要顯示的資訊 ========== -->
+<div class="sheet" id="fields-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="fields-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">關閉</button>
+    <h2 class="sheet__title" id="fields-sheet-title">顯示哪些資訊</h2>
+    <button class="sheet__del sheet__del--plain" id="btn-fields-reset" type="button">預設</button>
+  </div>
+
+  <div class="sheet__body">
+    <p class="card__sub">持有數量和損益一定會顯示，其餘自己挑。設定只存在這台裝置。</p>
+    <div class="field-toggles" id="field-toggles"></div>
+  </div>
 </div>
 
 <!-- ========== 更新現價 ========== -->

@@ -18,8 +18,30 @@ const LS = {
   secret: 'pb.secret',
   lastSync: 'pb.lastSync',
   theme: 'pb.theme',
+  fields: 'pb.fields',    // 持股頁要顯示哪些資訊，只存在這台裝置
   data: 'pb.',            // pb.instruments、pb.trades …
 };
+
+/**
+ * 持股卡片上可以自己開關的資訊。
+ * 持有數量和上方的損益一定會顯示，不放進來。
+ */
+const HOLDING_FIELDS = [
+  { key: 'avg', label: '平均成本', hint: '每單位' },
+  { key: 'price', label: '現價／淨值', hint: '' },
+  { key: 'rate', label: '匯率', hint: '美元計價才有' },
+  { key: 'value', label: '市值', hint: '' },
+  { key: 'cost', label: '投入成本', hint: '' },
+  { key: 'dividends', label: '累計配息', hint: '' },
+  { key: 'total', label: '含息報酬', hint: '對帳單的參考損益' },
+];
+
+/**
+ * 預設開這些。匯率留著是因為美元計價的基金看不到匯率，
+ * 就不知道市值是怎麼換算出來的（台幣計價的本來就不會顯示那一格）。
+ * 累計配息預設關起來 —— 報表頁看得到，而且含息報酬已經把它算進去了。
+ */
+const DEFAULT_FIELDS = ['avg', 'price', 'rate', 'value', 'cost', 'total'];
 
 /** 五張表的名字，同步與本機儲存都照這個順序跑 */
 const ENTITIES = ['instruments', 'trades', 'dividends', 'cashflows', 'prices'];
@@ -59,6 +81,9 @@ const state = {
   reportYear: null,
   showClosed: false,     // 持股頁的「已出清」是否展開
   showAllRecent: false,  // 首頁的最近紀錄是否展開全部
+  fields: DEFAULT_FIELDS.slice(),   // 持股卡片顯示哪些資訊
+  detailId: null,        // 正在看明細的標的
+  detailFilter: 'all',
 
   editing: null,         // { entity, id } 正在編輯的紀錄
   draft: {},             // 表單暫存：category、action、unit、style…
@@ -193,6 +218,13 @@ function loadLocal() {
     state.secret = localStorage.getItem(LS.secret) || '';
     state.lastSync = localStorage.getItem(LS.lastSync) || null;
     state.theme = localStorage.getItem(LS.theme) || 'light';
+
+    const saved = JSON.parse(localStorage.getItem(LS.fields) || 'null');
+    if (Array.isArray(saved)) {
+      // 過濾掉已經不存在的欄位名，免得改版後留下垃圾
+      state.fields = saved.filter((k) => HOLDING_FIELDS.some((f) => f.key === k));
+    }
+
     for (const entity of ENTITIES) {
       state[entity] = JSON.parse(localStorage.getItem(LS.data + entity) || '[]');
     }
@@ -956,9 +988,11 @@ function renderHoldings() {
   $('holdings-empty').hidden = held.length > 0 || closed.length > 0;
   $('holdings-totals').hidden = held.length === 0;
 
-  // 有 ETF 才顯示「更新現價」—— 基金沒有公開報價可抓
+  // 有 ETF 才顯示「更新現價」—— 基金沒有公開報價可抓。
+  // 顯示設定那顆按鈕只要有持股就在
   const etfs = held.filter((p) => p.type === ETF);
-  $('quote-bar').hidden = etfs.length === 0;
+  $('hold-tools').hidden = held.length === 0;
+  $('btn-refresh-prices').hidden = etfs.length === 0;
 
   const stamps = etfs
     .map((p) => priceRow(p.instrument.id))
@@ -1034,22 +1068,23 @@ function holdingHtml(card) {
   const cell = (label, value, extra = '') =>
     `<span class="hold__cell ${extra}"><span>${label}</span><span class="hold__num">${value}</span></span>`;
 
+  const on = (key) => state.fields.includes(key);
   const cells = [cell('持有', fmtQty(card.type, qty))];
 
-  if (!split) {
-    // 美元計價的成本是台幣、淨值是美元，兩個數字不能並排比較，
-    // 所以標題直接寫清楚是「每單位台幣成本」
+  // 美元計價的成本是台幣、淨值是美元，兩個數字不能並排比較，
+  // 所以標題直接寫清楚是「每單位台幣成本」
+  if (on('avg') && !split) {
     cells.push(cell(usd ? '每單位成本' : '平均成本', fmtNum(lots[0].avgPrice, usd ? 2 : 4)));
   }
-  cells.push(cell(priceLabel, price > 0 ? fmtNum(price, 4) : '未填'));
-  if (usd) cells.push(cell('匯率', rate > 0 ? fmtNum(rate, 4) : '未填'));
+  if (on('price')) cells.push(cell(priceLabel, price > 0 ? fmtNum(price, 4) : '未填'));
+  if (on('rate') && usd) cells.push(cell('匯率', rate > 0 ? fmtNum(rate, 4) : '未填'));
+  if (on('value')) cells.push(cell('市值', hasPrice ? fmtMoney(value) : '—'));
+  if (on('cost')) cells.push(cell('投入成本', fmtMoney(cost)));
+  if (on('dividends')) cells.push(cell('累計配息', fmtMoney(dividends)));
 
-  cells.push(cell('市值', hasPrice ? fmtMoney(value) : '—'));
-  cells.push(cell('投入成本', fmtMoney(cost)));
-  cells.push(cell('累計配息', fmtMoney(dividends)));
   // 對帳單上的「參考損益」是含配息的，這格才對得起來。
   // 佔滿一整行，不然「含息報酬」四個字會在窄格子裡折行
-  if (hasPrice) {
+  if (on('total') && hasPrice) {
     cells.push(cell(
       '含息報酬',
       plHtml(value - cost + dividends, cost, { cls: 'hold__inline-pl' }),
@@ -1064,7 +1099,8 @@ function holdingHtml(card) {
   return `
     <div class="hold ${isETF ? 'hold--etf' : 'hold--fund'}">
       <div class="hold__head">
-        <span class="hold__name">${escapeHtml(inst.name || '未命名')}${
+        <span class="hold__name hold__name--link" data-detail-id="${escapeHtml(inst.id)}"
+              role="button" tabindex="0">${escapeHtml(inst.name || '未命名')}${
           inst.code ? `<span class="hold__code">${escapeHtml(inst.code)}</span>` : ''
         }${singleStyle ? `<span class="hold__tag">${singleStyle}</span>` : ''}${
           usd ? '<span class="hold__tag hold__tag--usd">USD</span>' : ''
@@ -1092,13 +1128,23 @@ function styleLabel(style) {
 
 function lotHtml(position, hasPrice) {
   const unrealized = hasPrice ? position.value - position.cost : null;
-  // 這裡不放報酬率，卡片上方已經有整檔的了，一行塞四個數字會擠掉平均成本
+  const usd = isUsd(position.instrument);
+
+  // 投入成本另起一行，第一行才不會擠。
+  // 這裡不放報酬率，卡片上方已經有整檔的了
+  const sub = [
+    `投入 ${fmtMoney(position.cost)}`,
+    `平均 ${fmtNum(position.avgPrice, usd ? 2 : 4)}`,
+    hasPrice ? `市值 ${fmtMoney(position.value)}` : '',
+  ].filter(Boolean).join(' · ');
+
   return `
     <div class="lot">
       <span class="lot__name">${styleLabel(position.style)}</span>
       <span class="lot__qty">${fmtQty(position.type, position.qty)}</span>
-      <span class="lot__avg">平均 ${fmtNum(position.avgPrice, 4)}</span>
+      <span class="lot__avg"></span>
       ${plHtml(unrealized, 0, { cls: 'lot__pl' })}
+      <span class="lot__sub">${sub}</span>
     </div>`;
 }
 
@@ -1129,7 +1175,8 @@ function renderClosed(rounds) {
     return `
       <div class="closed__item">
         <div class="closed__head">
-          <span class="closed__name">${escapeHtml(inst.name || '未命名')}${
+          <span class="closed__name hold__name--link" data-detail-id="${escapeHtml(inst.id)}"
+                role="button" tabindex="0">${escapeHtml(inst.name || '未命名')}${
             inst.code ? `<span class="hold__code">${escapeHtml(inst.code)}</span>` : ''
           }${tag}</span>
           ${plHtml(round.realized, 0, { cls: 'closed__pl' })}
@@ -1167,6 +1214,120 @@ function renderSettings() {
           ${escapeHtml(i.code ? `${i.code} ${i.name}` : i.name)}
         </button>`).join('')
     : '<p class="chip-list__empty">還沒有標的</p>';
+}
+
+/* ==========================================================================
+   標的明細：某一檔的所有買賣與配息
+   ========================================================================== */
+
+function openDetailSheet(instrumentId) {
+  if (!instrumentById(instrumentId)) return;
+  state.detailId = instrumentId;
+  state.detailFilter = 'all';
+  renderDetail();
+  openSheet('detail-sheet');
+}
+
+function detailEntries() {
+  const id = state.detailId;
+  const filter = state.detailFilter;
+  const out = [];
+
+  if (filter !== 'dividend') {
+    for (const t of live('trades')) {
+      if (t.instrumentId === id) out.push({ kind: 'trade', record: t, date: t.date });
+    }
+  }
+  if (filter !== 'trade') {
+    for (const d of live('dividends')) {
+      if (d.instrumentId === id) out.push({ kind: 'dividend', record: d, date: d.payDate });
+    }
+  }
+
+  return out.sort((a, b) => {
+    const cmp = sortKey(b.date).localeCompare(sortKey(a.date));
+    return cmp || String(b.record.createdAt || '').localeCompare(String(a.record.createdAt || ''));
+  });
+}
+
+function renderDetail() {
+  const inst = instrumentById(state.detailId);
+  if (!inst) return;
+
+  $('detail-sheet-title').textContent = inst.code ? `${inst.code} ${inst.name}` : (inst.name || '標的');
+
+  const positions = buildPositions().filter((p) => p.instrument.id === inst.id);
+  const qty = positions.reduce((s, p) => s + p.qty, 0);
+  const cost = positions.reduce((s, p) => s + p.cost, 0);
+  const value = positions.reduce((s, p) => s + p.value, 0);
+  const dividends = positions.reduce((s, p) => s + p.allDividends, 0);
+  const realized = positions.reduce(
+    (s, p) => s + p.rounds.reduce((a, r) => a + r.realized, 0), 0
+  );
+  const hasPrice = positions.some((p) => p.hasPrice);
+
+  const row = (label, value, wide) =>
+    `<div class="detail-stats__row ${wide ? 'detail-stats__row--wide' : ''}">
+       <span>${label}</span><strong>${value}</strong></div>`;
+
+  const plRow = (label, amount, base) => {
+    const v = Math.round(amount);
+    const tone = v > 0 ? 'is-gain' : (v < 0 ? 'is-loss' : '');
+    const pct = base ? ` <small>${v >= 0 ? '+' : '−'}${Math.abs((amount / base) * 100).toFixed(1)}%</small>` : '';
+    return `<div class="detail-stats__row detail-stats__row--wide">
+              <span>${label}</span><strong class="${tone}">${fmtMoney(v, { sign: true })}${pct}</strong></div>`;
+  };
+
+  const stats = [];
+  if (qty > EPS) {
+    stats.push(row('持有', fmtQty(inst.type, qty)));
+    stats.push(row('投入成本', fmtMoney(cost)));
+    if (hasPrice) stats.push(row('市值', fmtMoney(value)));
+    stats.push(row('累計配息', fmtMoney(dividends)));
+    if (hasPrice) stats.push(plRow('含息報酬', value - cost + dividends, cost));
+  } else {
+    stats.push(row('目前持有', '已出清'));
+    stats.push(row('累計配息', fmtMoney(dividends)));
+  }
+  if (Math.round(realized) !== 0) stats.push(plRow('已實現損益', realized, 0));
+
+  $('detail-stats').innerHTML = stats.join('');
+
+  for (const chip of document.querySelectorAll('#detail-filter .chip')) {
+    chip.classList.toggle('is-active', chip.dataset.detail === state.detailFilter);
+  }
+
+  const entries = detailEntries();
+  $('detail-list').innerHTML = entries.map(entryHtml).join('');
+  $('detail-empty').hidden = entries.length > 0;
+}
+
+/* ==========================================================================
+   顯示哪些資訊
+   ========================================================================== */
+
+function openFieldsSheet() {
+  renderFieldToggles();
+  openSheet('fields-sheet');
+}
+
+function renderFieldToggles() {
+  $('field-toggles').innerHTML = HOLDING_FIELDS.map((f) => `
+    <label class="toggle field-toggle">
+      <input type="checkbox" data-field="${f.key}" ${state.fields.includes(f.key) ? 'checked' : ''}>
+      <span class="toggle__box" aria-hidden="true"></span>
+      <span>${f.label}</span>
+      ${f.hint ? `<span class="field-toggle__hint">${f.hint}</span>` : ''}
+    </label>`).join('');
+}
+
+function saveFields() {
+  try {
+    localStorage.setItem(LS.fields, JSON.stringify(state.fields));
+  } catch (err) {
+    // 存不進去就只是這次有效，不影響顯示
+  }
+  renderHoldings();
 }
 
 /* ==========================================================================
@@ -2213,6 +2374,52 @@ function bindEvents() {
   $('btn-closed-toggle').addEventListener('click', () => {
     state.showClosed = !state.showClosed;
     renderHoldings();
+  });
+
+  // 點標的名稱看那一檔的完整紀錄（持股中和已出清的都可以）
+  for (const id of ['holdings-list', 'closed-list']) {
+    $(id).addEventListener('click', (e) => {
+      const link = e.target.closest('[data-detail-id]');
+      if (link) openDetailSheet(link.dataset.detailId);
+    });
+  }
+
+  // ---- 標的明細 ----
+  $('detail-filter').addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    state.detailFilter = chip.dataset.detail;
+    renderDetail();
+  });
+
+  $('detail-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.entry');
+    if (btn) editEntry(btn.dataset.entity, btn.dataset.id);
+  });
+
+  $('btn-detail-edit').addEventListener('click', () => {
+    const inst = instrumentById(state.detailId);
+    if (inst) openInstrumentSheet({ record: inst });
+  });
+
+  // ---- 顯示哪些資訊 ----
+  $('btn-fields').addEventListener('click', openFieldsSheet);
+
+  $('field-toggles').addEventListener('change', (e) => {
+    const box = e.target.closest('input[data-field]');
+    if (!box) return;
+    const key = box.dataset.field;
+    state.fields = box.checked
+      ? [...state.fields, key]
+      : state.fields.filter((k) => k !== key);
+    saveFields();
+  });
+
+  $('btn-fields-reset').addEventListener('click', () => {
+    state.fields = DEFAULT_FIELDS.slice();
+    saveFields();
+    renderFieldToggles();
+    toast('已回到預設');
   });
 
   // ---- 底部面板共用 ----

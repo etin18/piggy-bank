@@ -500,6 +500,53 @@ async function run() {
   if (!closedOk) problems.push(`已出清內容不對：${closedItem}`);
   await shot(page, '09b-已出清');
 
+  console.log('\n── 單一標的的完整紀錄 ──');
+  await page.locator('.hold__name--link').first().click();
+  await page.waitForTimeout(400);
+  const detailTitle = (await page.locator('#detail-sheet-title').innerText()).trim();
+  const detailCount = await page.locator('#detail-list .entry').count();
+  const detailStats = (await page.locator('#detail-stats').innerText()).replace(/\s+/g, ' ');
+  console.log(`  標題：${detailTitle}`);
+  console.log(`  摘要：${detailStats}`);
+  console.log(`  ${detailCount > 0 ? '✅' : '❌'} 列出 ${detailCount} 筆紀錄`);
+  if (!detailCount) problems.push('標的明細沒有列出任何紀錄');
+
+  // 0056 有 2 筆買進、3 筆配息
+  await page.locator('#detail-filter .chip[data-detail="dividend"]').click();
+  await page.waitForTimeout(300);
+  const divOnly = await page.locator('#detail-list .entry').count();
+  console.log(`  ${divOnly === 3 ? '✅' : '❌'} 只看配息：${divOnly} 筆`);
+  if (divOnly !== 3) problems.push(`標的明細的配息篩選不對：${divOnly} 筆`);
+
+  await page.locator('#detail-filter .chip[data-detail="trade"]').click();
+  await page.waitForTimeout(300);
+  const tradeOnly = await page.locator('#detail-list .entry').count();
+  console.log(`  ${tradeOnly === 2 ? '✅' : '❌'} 只看買賣：${tradeOnly} 筆`);
+  if (tradeOnly !== 2) problems.push(`標的明細的買賣篩選不對：${tradeOnly} 筆`);
+  await shot(page, '09c-標的明細');
+
+  await page.locator('#detail-sheet [data-close]').click();
+  await page.waitForTimeout(400);
+
+  console.log('\n── 自選顯示欄位 ──');
+  const cellsBefore = await page.locator('.hold').first().locator('.hold__cell').count();
+  await page.locator('#btn-fields').click();
+  await page.waitForTimeout(400);
+  await shot(page, '09d-顯示欄位');
+
+  // checkbox 本身是隱藏的（外觀做在自訂方塊上），要點 label
+  await page.locator('#field-toggles label:has(input[data-field="dividends"])').click();
+  await page.waitForTimeout(300);
+  await page.locator('#fields-sheet [data-close]').click();
+  await page.waitForTimeout(400);
+  const cellsAfter = await page.locator('.hold').first().locator('.hold__cell').count();
+  console.log(`  ${cellsAfter === cellsBefore + 1 ? '✅' : '❌'} 勾選「累計配息」後格子從 ${cellsBefore} 變 ${cellsAfter}`);
+  if (cellsAfter !== cellsBefore + 1) problems.push(`勾選欄位沒有生效：${cellsBefore} → ${cellsAfter}`);
+
+  const persisted = await page.evaluate(() => localStorage.getItem('pb.fields'));
+  console.log(`  ${persisted && persisted.includes('dividends') ? '✅' : '❌'} 設定有存起來：${persisted}`);
+  if (!persisted || !persisted.includes('dividends')) problems.push('顯示欄位設定沒有存到 localStorage');
+
   console.log('\n── 更新現價 ──');
   await page.locator('.hold__price-btn').first().click();
   await page.waitForTimeout(400);
@@ -578,7 +625,7 @@ async function run() {
   await page.locator('.tab[data-page="holdings"]').click();
   await page.waitForTimeout(400);
 
-  const barVisible = await page.locator('#quote-bar').isVisible();
+  const barVisible = await page.locator('#btn-refresh-prices').isVisible();
   console.log(`  ${barVisible ? '✅' : '❌'} 持股頁出現「更新 ETF 現價」按鈕`);
   if (!barVisible) problems.push('持股頁沒有出現更新現價按鈕');
 
