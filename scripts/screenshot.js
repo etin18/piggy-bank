@@ -525,8 +525,29 @@ async function run() {
   if (tradeOnly !== 2) problems.push(`標的明細的買賣篩選不對：${tradeOnly} 筆`);
   await shot(page, '09c-標的明細');
 
-  await page.locator('#detail-sheet [data-close]').click();
-  await page.waitForTimeout(400);
+  /* 從明細點進去編輯，存檔後必須是「改到原本那筆」而不是多一筆。
+     openSheet 會先關掉明細面板，早期版本在關閉時把 state.editing 清成 null，
+     於是存檔變成新增 —— 這條測試就是守著那個坑 */
+  console.log('\n── 從明細編輯不能變成新增 ──');
+  const tradeCount = () => page.evaluate(
+    () => JSON.parse(localStorage.getItem('pb.trades') || '[]').length
+  );
+  const before = await tradeCount();
+
+  await page.locator('#detail-list .entry').first().click();
+  await page.waitForTimeout(500);
+  await page.fill('#t-note', '從明細改的');
+  await page.locator('#trade-form button[type="submit"]').click();
+  await page.waitForTimeout(600);
+
+  const after = await tradeCount();
+  const edited = await page.evaluate(() => JSON.parse(localStorage.getItem('pb.trades') || '[]')
+    .filter((t) => t.note === '從明細改的').length);
+
+  console.log(`  ${after === before ? '✅' : '❌'} 交易筆數沒變：${before} → ${after}`);
+  console.log(`  ${edited === 1 ? '✅' : '❌'} 備註改在原本那筆上（找到 ${edited} 筆）`);
+  if (after !== before) problems.push(`從明細編輯變成新增：${before} → ${after} 筆`);
+  if (edited !== 1) problems.push(`從明細編輯沒有更新到原本那筆：找到 ${edited} 筆`);
 
   console.log('\n── 自選顯示欄位 ──');
   const cellsBefore = await page.locator('.hold').first().locator('.hold__cell').count();

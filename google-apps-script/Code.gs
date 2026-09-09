@@ -47,7 +47,7 @@ var SHEETS = {
     label: '標的',
     fields: [
       { key: 'id',        header: 'id',       type: 'text',   width: 250 },
-      { key: 'code',      header: '代號',     type: 'text' },
+      { key: 'code',      header: '代號',     type: 'text',   plain: true },
       { key: 'name',      header: '名稱',     type: 'text',   width: 200 },
       { key: 'type',      header: '類型',     type: 'text' },
       // 計價幣別。美元計價的基金，淨值是美元，算市值要再乘匯率
@@ -65,7 +65,7 @@ var SHEETS = {
     fields: [
       { key: 'id',           header: 'id',       type: 'text',   width: 250 },
       { key: 'instrumentId', header: '標的id',   type: 'text',   width: 250 },
-      { key: 'code',         header: '標的',     type: 'text' },
+      { key: 'code',         header: '標的',     type: 'text',   plain: true },
       { key: 'date',         header: '日期',     type: 'date' },
       { key: 'action',       header: '動作',     type: 'text' },
       { key: 'style',        header: '型態',     type: 'text' },
@@ -87,7 +87,7 @@ var SHEETS = {
     fields: [
       { key: 'id',           header: 'id',         type: 'text',   width: 250 },
       { key: 'instrumentId', header: '標的id',     type: 'text',   width: 250 },
-      { key: 'code',         header: '標的',       type: 'text' },
+      { key: 'code',         header: '標的',       type: 'text',   plain: true },
       // 基金的單筆與定期定額在銀行是兩筆各自獨立的投資明細，配息也分開發，
       // 所以配息要記是哪一種。ETF 不分，留空
       { key: 'style',        header: '型態',       type: 'text' },
@@ -120,7 +120,7 @@ var SHEETS = {
     label: '現價',
     fields: [
       { key: 'id',        header: '標的id',   type: 'text',   width: 250 },
-      { key: 'code',      header: '標的',     type: 'text' },
+      { key: 'code',      header: '標的',     type: 'text',   plain: true },
       { key: 'price',     header: '價格',     type: 'number' },
       // 美元計價基金的參考匯率。台幣計價的填 1
       { key: 'rate',      header: '匯率',     type: 'number' },
@@ -227,18 +227,31 @@ function getSheet(entity) {
     sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
 
     for (var i = 0; i < config.fields.length; i++) {
-      var field = config.fields[i];
-      // 日期欄設純文字，否則 Sheets 會把 2026-09-08 轉成本地日期格式，
-      // 讀回來的字串就不是我們寫進去的樣子了
-      if (field.type === 'date') {
-        sheet.getRange(2, i + 1, sheet.getMaxRows() - 1, 1).setNumberFormat('@');
-      }
-      if (field.width) sheet.setColumnWidth(i + 1, field.width);
+      if (config.fields[i].width) sheet.setColumnWidth(i + 1, config.fields[i].width);
     }
+    ensureFormats(sheet, config);
   } else {
     ensureColumns(sheet, config);
+    ensureFormats(sheet, config);
   }
   return sheet;
+}
+
+/**
+ * 日期欄和代號欄都要設成純文字：
+ *   日期 —— 否則 Sheets 會把 2026-09-08 轉成本地日期格式，讀回來就不是原本的樣子
+ *   代號 —— 否則 0809 會被當成數字存成 809，前面的 0 就沒了（0056 也一樣）
+ *
+ * 格式要先設好再寫值。值一旦被存成數字，之後再改格式也救不回前面的 0。
+ */
+function ensureFormats(sheet, config) {
+  var rows = Math.max(1, sheet.getMaxRows() - 1);
+  for (var i = 0; i < config.fields.length; i++) {
+    var field = config.fields[i];
+    if (field.type === 'date' || field.plain) {
+      sheet.getRange(2, i + 1, rows, 1).setNumberFormat('@');
+    }
+  }
 }
 
 /**
@@ -272,9 +285,6 @@ function ensureColumns(sheet, config) {
     }
 
     sheet.getRange(1, j + 1).setValue(field.header).setFontWeight('bold');
-    if (field.type === 'date') {
-      sheet.getRange(2, j + 1, Math.max(1, sheet.getMaxRows() - 1), 1).setNumberFormat('@');
-    }
     if (field.width) sheet.setColumnWidth(j + 1, field.width);
   }
 }
@@ -340,11 +350,6 @@ function saveRow(entity, record) {
     rowIndex = sheet.getLastRow();
   } else {
     sheet.getRange(rowIndex, 1, 1, config.fields.length).setValues([rowValues]);
-  }
-
-  // 日期欄每次寫完都重設純文字，新增的列不會繼承整欄格式
-  for (var k = 0; k < config.fields.length; k++) {
-    if (config.fields[k].type === 'date') sheet.getRange(rowIndex, k + 1).setNumberFormat('@');
   }
 
   return out;

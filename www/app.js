@@ -1222,6 +1222,7 @@ function renderSettings() {
 
 function openDetailSheet(instrumentId) {
   if (!instrumentById(instrumentId)) return;
+  state.editing = null;   // 這是檢視用的面板，沒有在編輯任何一筆
   state.detailId = instrumentId;
   state.detailFilter = 'all';
   renderDetail();
@@ -1370,7 +1371,9 @@ function closeSheet(immediate = false) {
   };
   if (immediate) { sheet.hidden = true; scrim.hidden = true; } else { setTimeout(hide, 240); }
 
-  state.editing = null;
+  // 這裡不能清 state.editing。openSheet 會先呼叫這裡把上一個面板關掉，
+  // 從「標的明細」點某筆進去編輯時，正在編輯的 id 會被清成 null，
+  // 存檔就變成新增一筆。各個 open*Sheet 自己都會設好 editing，交給它們。
 }
 
 function showError(id, message) {
