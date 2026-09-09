@@ -557,6 +557,17 @@
       </div>
     </div>
 
+    <div class="field" id="i-currency-field" hidden>
+      <span class="field__label">計價幣別</span>
+      <div class="chips" id="i-currency-chips">
+        <button class="chip" type="button" data-currency="TWD">台幣</button>
+        <button class="chip" type="button" data-currency="USD">美元</button>
+      </div>
+      <span class="field__hint">
+        看對帳單的「計價幣別」。美元計價的淨值是美元，算市值要再乘匯率
+      </span>
+    </div>
+
     <label class="field">
       <span class="field__label">代號</span>
       <input class="input" id="i-code" type="text" maxlength="20" autocomplete="off"
@@ -615,6 +626,14 @@
       <input class="input" id="p-price" type="text" inputmode="decimal" autocomplete="off" required>
       <span class="field__hint" id="p-hint"></span>
     </label>
+
+    <label class="field" id="p-rate-field" hidden>
+      <span class="field__label">參考匯率</span>
+      <input class="input" id="p-rate" type="text" inputmode="decimal" autocomplete="off">
+      <span class="field__hint" id="p-rate-hint">對帳單上的「參考匯率」，跟淨值一起抄</span>
+    </label>
+
+    <p class="field__hint is-calc" id="p-preview" hidden></p>
 
     <button class="btn btn--quote btn--block" id="btn-fetch-price" type="button" hidden>
       <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">

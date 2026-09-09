@@ -398,6 +398,19 @@ function priceRow(instrumentId) {
   return live('prices').find((p) => p.id === instrumentId) || null;
 }
 
+/** 美元計價的基金，淨值是美元，換算台幣市值要乘匯率；台幣計價的一律 1 */
+function isUsd(instrument) {
+  return !!instrument && instrument.currency === 'USD';
+}
+
+function rateOf(instrumentId) {
+  const inst = instrumentById(instrumentId);
+  if (!isUsd(inst)) return 1;
+  const row = priceRow(instrumentId);
+  const rate = row ? Number(row.rate) || 0 : 0;
+  return rate > 0 ? rate : 0;   // 還沒填匯率就算不出台幣市值
+}
+
 /**
  * 基金的單筆與定期定額在銀行是兩筆各自獨立的投資明細，各有各的平均淨值，
  * 所以要當成兩個部位分開算。ETF 不分。
@@ -565,10 +578,14 @@ function buildPositions() {
     const current = rounds.find((r) => !r.closed) || null;
     const closed = rounds.filter((r) => r.closed);
     const price = priceOf(position.instrument.id);
+    const rate = rateOf(position.instrument.id);
+
+    // 美元計價又還沒填匯率的話，算不出台幣市值，當成「沒有價格」處理
+    const priced = price > 0 && rate > 0;
 
     const qty = current ? current.qty : 0;
     const cost = current ? current.cost : 0;
-    const value = price ? qty * price : 0;
+    const value = priced ? qty * price * rate : 0;
 
     positions.push({
       ...position,
@@ -578,10 +595,11 @@ function buildPositions() {
       qty,
       cost,
       price,
+      rate,
       value,
-      hasPrice: price > 0,
+      hasPrice: priced,
       avgPrice: current && current.qty > EPS ? current.costExFee / current.qty : 0,
-      unrealized: price ? value - cost : null,
+      unrealized: priced ? value - cost : null,
       dividends: current ? current.dividends : 0,
       hasEstimate: current ? current.hasEstimate : false,
       pastRealized: closed.reduce((sum, r) => sum + r.realized, 0),
@@ -999,9 +1017,11 @@ function holdingHtml(card) {
   const cost = lots.reduce((s, p) => s + p.cost, 0);
   const dividends = lots.reduce((s, p) => s + p.dividends, 0);
   const past = lots.reduce((s, p) => s + p.pastRealized, 0);
+  const value = lots.reduce((s, p) => s + p.value, 0);
   const hasPrice = lots[0].hasPrice;
   const price = lots[0].price;
-  const value = hasPrice ? qty * price : 0;
+  const rate = lots[0].rate;
+  const usd = isUsd(inst);
   const hasEstimate = lots.some((p) => p.hasEstimate);
 
   const row = priceRow(inst.id);
@@ -1010,6 +1030,32 @@ function holdingHtml(card) {
   // 同一檔基金有單筆也有定期定額時，上面顯示合計、下面拆開列
   const split = lots.length > 1;
   const singleStyle = !split && card.type === FUND ? styleLabel(lots[0].style) : '';
+
+  const cell = (label, value, extra = '') =>
+    `<span class="hold__cell ${extra}"><span>${label}</span><span class="hold__num">${value}</span></span>`;
+
+  const cells = [cell('持有', fmtQty(card.type, qty))];
+
+  if (!split) {
+    // 美元計價的成本是台幣、淨值是美元，兩個數字不能並排比較，
+    // 所以標題直接寫清楚是「每單位台幣成本」
+    cells.push(cell(usd ? '每單位成本' : '平均成本', fmtNum(lots[0].avgPrice, usd ? 2 : 4)));
+  }
+  cells.push(cell(priceLabel, price > 0 ? fmtNum(price, 4) : '未填'));
+  if (usd) cells.push(cell('匯率', rate > 0 ? fmtNum(rate, 4) : '未填'));
+
+  cells.push(cell('市值', hasPrice ? fmtMoney(value) : '—'));
+  cells.push(cell('投入成本', fmtMoney(cost)));
+  cells.push(cell('累計配息', fmtMoney(dividends)));
+  // 對帳單上的「參考損益」是含配息的，這格才對得起來。
+  // 佔滿一整行，不然「含息報酬」四個字會在窄格子裡折行
+  if (hasPrice) {
+    cells.push(cell(
+      '含息報酬',
+      plHtml(value - cost + dividends, cost, { cls: 'hold__inline-pl' }),
+      'hold__cell--wide'
+    ));
+  }
 
   const notes = [];
   if (hasEstimate) notes.push('含 2025 之前概估期初，成本僅供參考');
@@ -1020,21 +1066,13 @@ function holdingHtml(card) {
       <div class="hold__head">
         <span class="hold__name">${escapeHtml(inst.name || '未命名')}${
           inst.code ? `<span class="hold__code">${escapeHtml(inst.code)}</span>` : ''
-        }${singleStyle ? `<span class="hold__tag">${singleStyle}</span>` : ''}</span>
+        }${singleStyle ? `<span class="hold__tag">${singleStyle}</span>` : ''}${
+          usd ? '<span class="hold__tag hold__tag--usd">USD</span>' : ''
+        }</span>
         ${hasPrice ? plHtml(value - cost, cost) : '<span class="hold__pl is-flat">—</span>'}
       </div>
 
-      <div class="hold__grid">
-        <span class="hold__cell"><span>持有</span><span class="hold__num">${fmtQty(card.type, qty)}</span></span>
-        ${split
-          ? `<span class="hold__cell"><span>${priceLabel}</span><span class="hold__num">${hasPrice ? fmtNum(price, 4) : '未填'}</span></span>`
-          : `<span class="hold__cell"><span>平均成本</span><span class="hold__num">${fmtNum(lots[0].avgPrice, 4)}</span></span>
-             <span class="hold__cell"><span>${priceLabel}</span><span class="hold__num">${hasPrice ? fmtNum(price, 4) : '未填'}</span></span>`
-        }
-        <span class="hold__cell"><span>市值</span><span class="hold__num">${hasPrice ? fmtMoney(value) : '—'}</span></span>
-        <span class="hold__cell"><span>投入成本</span><span class="hold__num">${fmtMoney(cost)}</span></span>
-        <span class="hold__cell"><span>累計配息</span><span class="hold__num">${fmtMoney(dividends)}</span></span>
-      </div>
+      <div class="hold__grid">${cells.join('')}</div>
 
       ${split ? `<div class="lots">${lots.map((p) => lotHtml(p, hasPrice)).join('')}</div>` : ''}
 
@@ -1516,13 +1554,22 @@ function updateDividendHints() {
   const taxHint = $('d-tax-hint');
 
   if (gross > 0) {
-    const diff = gross - received;
     let text;
-    if (!received) text = `應發約 ${fmtMoney(gross)}`;
-    else if (diff > 0.5) text = `應發 ${fmtMoney(gross)}，被扣 ${fmtMoney(diff)}（稅費）`;
-    // 實領比應發多，通常是哪個數字填錯了 —— 講出來讓人回頭看一眼
-    else if (diff < -0.5) text = `應發 ${fmtMoney(gross)}，實領多了 ${fmtMoney(-diff)}，確認一下`;
-    else text = `應發 ${fmtMoney(gross)}，全額入帳`;
+    if (isUsd(inst)) {
+      // 美元計價的每單位配息是美元，實領是換匯後的台幣。
+      // 配息當天的匯率跟現在不一樣，硬要相減只會得到假的「稅費」，所以只做粗估
+      const rate = rateOf(inst.id);
+      text = rate > 0
+        ? `應發約 ${fmtNum(gross, 2)} 美元（依目前匯率約 ${fmtMoney(gross * rate)}）`
+        : `應發約 ${fmtNum(gross, 2)} 美元`;
+    } else {
+      const diff = gross - received;
+      if (!received) text = `應發約 ${fmtMoney(gross)}`;
+      else if (diff > 0.5) text = `應發 ${fmtMoney(gross)}，被扣 ${fmtMoney(diff)}（稅費）`;
+      // 實領比應發多，通常是哪個數字填錯了 —— 講出來讓人回頭看一眼
+      else if (diff < -0.5) text = `應發 ${fmtMoney(gross)}，實領多了 ${fmtMoney(-diff)}，確認一下`;
+      else text = `應發 ${fmtMoney(gross)}，全額入帳`;
+    }
 
     taxHint.textContent = text;
     taxHint.classList.add('is-calc');
@@ -1631,22 +1678,32 @@ function openInstrumentSheet({ type, record = null, returnTo = null }) {
   setChips('i-type-chips', 'type', record ? record.type : (type || ETF));
   setChips('i-freq-chips', 'freq', record ? (record.frequency || '季配') : '季配');
   setChips('i-status-chips', 'status', record ? (record.status || '持有中') : '持有中');
+  setChips('i-currency-chips', 'currency', record ? (record.currency || 'TWD') : 'TWD');
 
   $('i-code').value = record ? (record.code || '') : '';
   $('i-name').value = record ? (record.name || '') : '';
 
+  syncCurrencyField();
   openSheet('instrument-sheet');
+}
+
+/** 台股 ETF 一定是台幣，只有基金要問計價幣別 */
+function syncCurrencyField() {
+  $('i-currency-field').hidden = chipValue('i-type-chips', 'type') !== FUND;
 }
 
 function submitInstrument() {
   const name = $('i-name').value.trim();
   if (!name) return showError('instrument-error', '請填名稱');
 
+  const type = chipValue('i-type-chips', 'type') || ETF;
   const record = {
     id: state.editing ? state.editing.id : uuid(),
     code: $('i-code').value.trim(),
     name,
-    type: chipValue('i-type-chips', 'type') || ETF,
+    type,
+    // 台股 ETF 一律台幣
+    currency: type === FUND ? (chipValue('i-currency-chips', 'currency') || 'TWD') : 'TWD',
     frequency: chipValue('i-freq-chips', 'freq') || '',
     status: state.editing ? (chipValue('i-status-chips', 'status') || '持有中') : '持有中',
     note: '',
@@ -1697,8 +1754,10 @@ function openPriceSheet(instrumentId) {
   showError('price-error', '');
 
   const isETF = inst.type === ETF;
+  const usd = isUsd(inst);
+
   $('p-name').textContent = inst.code ? `${inst.code} ${inst.name}` : inst.name;
-  $('p-label').textContent = isETF ? '現在股價' : '最新淨值';
+  $('p-label').textContent = isETF ? '現在股價' : (usd ? '最新淨值（美元）' : '最新淨值');
   $('p-hint').textContent = isETF
     ? '看券商 App 或股價網站的收盤價'
     : '看銀行對帳單或基金平台的最新淨值';
@@ -1706,11 +1765,39 @@ function openPriceSheet(instrumentId) {
   const row = priceRow(instrumentId);
   $('p-price').value = row && row.price ? fmtNum(row.price, 6) : '';
 
+  // 美元計價的基金要連匯率一起記，不然算不出台幣市值
+  $('p-rate-field').hidden = !usd;
+  $('p-rate').value = row && row.rate ? fmtNum(row.rate, 4) : '';
+
   // 只有填了代號的 ETF 抓得到報價
   $('btn-fetch-price').hidden = !(isETF && String(inst.code || '').trim());
   $('p-hint').classList.remove('is-calc');
 
+  updatePricePreview();
   openSheet('price-sheet');
+}
+
+/** 邊填邊試算台幣市值，數字填錯（例如淨值和匯率填反）一眼就看得出來 */
+function updatePricePreview() {
+  const box = $('p-preview');
+  const inst = instrumentById(state.draft.priceId);
+  const price = parseNum($('p-price').value);
+  const rate = isUsd(inst) ? parseNum($('p-rate').value) : 1;
+
+  const qty = inst ? heldPositions()
+    .filter((p) => p.instrument.id === inst.id)
+    .reduce((sum, p) => sum + p.qty, 0) : 0;
+
+  if (!price || !rate || !qty) {
+    box.hidden = true;
+    return;
+  }
+
+  const value = qty * price * rate;
+  box.hidden = false;
+  box.textContent = isUsd(inst)
+    ? `${fmtNum(qty, 4)} 單位 × ${fmtNum(price, 4)} × ${fmtNum(rate, 4)} ＝ 市值 ${fmtMoney(value)}`
+    : `${fmtNum(qty, 4)} × ${fmtNum(price, 4)} ＝ 市值 ${fmtMoney(value)}`;
 }
 
 function submitPrice() {
@@ -1719,10 +1806,16 @@ function submitPrice() {
   if (!price) return showError('price-error', '請填價格');
 
   const inst = instrumentById(instrumentId);
+  const usd = isUsd(inst);
+  const rate = usd ? parseNum($('p-rate').value) : 1;
+  if (usd && !rate) return showError('price-error', '美元計價的基金要填參考匯率');
+
   upsert('prices', {
     id: instrumentId,
     code: inst ? (inst.code || inst.name) : '',
     price,
+    rate,
+    updatedAt: new Date().toISOString(),
   });
 
   closeSheet();
@@ -1781,6 +1874,7 @@ async function refreshEtfPrices() {
         id: inst.id,
         code: inst.code,
         price: quote.price,
+        rate: 1,          // 台股一律台幣
         updatedAt: new Date().toISOString(),
       }, { flush: false });
       updated++;
@@ -2080,6 +2174,7 @@ function bindEvents() {
         state.draft.style = chip.dataset.style;
         renderAmountQuick();   // 單筆和定期定額的常用金額不一樣
       }
+      if (group.id === 'i-type-chips') syncCurrencyField();
       if (group.id === 'd-style-chips') {
         // 換了型態，持有單位要照那一邊重新帶入
         $('d-units').dataset.auto = '1';
@@ -2163,6 +2258,8 @@ function bindEvents() {
   $('price-form').addEventListener('submit', (e) => { e.preventDefault(); submitPrice(); });
   $('btn-fetch-price').addEventListener('click', fetchOnePrice);
   $('btn-refresh-prices').addEventListener('click', refreshEtfPrices);
+  $('p-price').addEventListener('input', updatePricePreview);
+  $('p-rate').addEventListener('input', updatePricePreview);
 
   // ---- 設定頁 ----
   $('btn-add-instrument').addEventListener('click', () => openInstrumentSheet({ type: ETF }));

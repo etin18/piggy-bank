@@ -54,9 +54,11 @@ function findChromium() {
 
 const SEED = {
   instruments: [
-    { id: 'i1', code: '0056', name: '元大高股息', type: 'ETF', frequency: '季配', status: '持有中', note: '' },
-    { id: 'i2', code: '00919', name: '群益台灣精選高息', type: 'ETF', frequency: '季配', status: '持有中', note: '' },
-    { id: 'i3', code: '', name: '安聯收益成長', type: '基金', frequency: '月配', status: '持有中', note: '' },
+    { id: 'i1', code: '0056', name: '元大高股息', type: 'ETF', currency: 'TWD', frequency: '季配', status: '持有中', note: '' },
+    { id: 'i2', code: '00919', name: '群益台灣精選高息', type: 'ETF', currency: 'TWD', frequency: '季配', status: '持有中', note: '' },
+    { id: 'i3', code: '', name: '安聯收益成長', type: '基金', currency: 'TWD', frequency: '月配', status: '持有中', note: '' },
+    // 美元計價：淨值是美元，市值要再乘匯率
+    { id: 'i4', code: '', name: '天達環球動力', type: '基金', currency: 'USD', frequency: '季配', status: '持有中', note: '' },
   ],
 
   trades: [
@@ -87,6 +89,10 @@ const SEED = {
       quantity: 1000, price: 26.5, amount: 26500, fee: 65, cash: 26435, note: '' },
     { id: 't10', instrumentId: 'i2', code: '00919', date: '2026-07-10', action: '買進', style: '',
       quantity: 1000, price: 22.9, amount: 22900, fee: 33, cash: 22933, note: '' },
+
+    // 美元計價基金：台幣扣款 30,000，換到 24.606 單位（淨值是美元）
+    { id: 't11', instrumentId: 'i4', code: '天達環球動力', date: '2025-09-23', action: '買進', style: '單筆',
+      quantity: 24.6060, price: 38.79, amount: 30000, fee: 0, cash: 30000, note: '' },
   ],
 
   dividends: [
@@ -114,6 +120,10 @@ const SEED = {
       perUnit: 0.26, units: 800, received: 208, note: '' },
     { id: 'd10', instrumentId: 'i3', code: '安聯收益成長', style: '小額', exDate: '2026-08-15', payDate: '2026-08-16',
       perUnit: 0.26, units: 361.1546, received: 94, note: '' },
+
+    // 美元計價基金：每單位配息是美元，實領是換匯後的台幣
+    { id: 'd11', instrumentId: 'i4', code: '天達環球動力', style: '單筆', exDate: '2026-06-18', payDate: '2026-06-20',
+      perUnit: 0.5, units: 24.606, received: 380, note: '' },
   ],
 
   cashflows: [
@@ -123,9 +133,10 @@ const SEED = {
   ],
 
   prices: [
-    { id: 'i1', code: '0056', price: 38.2, updatedAt: '2026-09-08T01:00:00.000Z' },
-    { id: 'i2', code: '00919', price: 24.5, updatedAt: '2026-09-08T01:00:00.000Z' },
-    { id: 'i3', code: '安聯收益成長', price: 46.2, updatedAt: '2026-09-08T01:00:00.000Z' },
+    { id: 'i1', code: '0056', price: 38.2, rate: 1, updatedAt: '2026-09-08T01:00:00.000Z' },
+    { id: 'i2', code: '00919', price: 24.5, rate: 1, updatedAt: '2026-09-08T01:00:00.000Z' },
+    { id: 'i3', code: '安聯收益成長', price: 46.2, rate: 1, updatedAt: '2026-09-08T01:00:00.000Z' },
+    { id: 'i4', code: '天達環球動力', price: 53.63, rate: 31.424, updatedAt: '2026-09-08T01:00:00.000Z' },
   ],
 };
 
@@ -143,28 +154,33 @@ const SEED = {
                平均 42.3046 → 市值 21,841.6，未實現 +1,741.6
    安聯合計     1,272.7617 單位，成本 50,100，市值 58,801.6，未實現 +8,701.6
 
+   天達（美元計價）
+               台幣扣款 30,000 換到 24.6060 單位
+               淨值 53.63 美元 × 匯率 31.4240 → 市值 41,467.7，未實現 +11,468
+               ★ 不乘匯率的話會算成 1,320，差 31 倍
+
    券商餘額 150,000 −73,104 −37,253 −23,834 +26,435 −22,933 +7,117 ＝ 26,428
-   基金餘額  50,000 +20,000 −20,100 +894 ＝ 50,794
+   基金餘額  50,000 +20,000 −20,100 −30,000 +894 +380 ＝ 21,174
      （期初那筆申購不扣款，錢在期初餘額之前就付掉了）
 
    2026 配息  ETF 2,078+1,683+2,643+713 ＝ 7,117
-              基金 200+90+208+94+208+94 ＝ 894
-              合計 8,011 ÷ 9 ＝ 890
+              基金 200+90+208+94+208+94 ＝ 894，天達 380 → 1,274
+              合計 8,391 ÷ 9 ＝ 932
 
-   總市值 114,600 + 24,500 + 58,801.6 ＝ 197,902
-   總成本 110,357 + 22,933 + 50,100    ＝ 183,390
-   未實現 ＝ +14,512 */
+   總市值 114,600 +24,500 +58,801.6 +41,467.7 ＝ 239,369
+   總成本 110,357 +22,933 +50,100 +30,000    ＝ 213,390
+   未實現 ＝ +25,979 */
 const EXPECT = {
-  'summary-total': '$8,011',
-  'summary-avg': '$890',
-  'rp-total': '$8,011',
+  'summary-total': '$8,391',
+  'summary-avg': '$932',
+  'rp-total': '$8,391',
   'rp-etf': '$7,117',
-  'rp-fund': '$894',
+  'rp-fund': '$1,274',
   'bal-etf': '$26,428',
-  'bal-fund': '$50,794',
-  'hd-value': '$197,902',
-  'hd-cost': '$183,390',
-  'hd-pl': '+$14,512',
+  'bal-fund': '$21,174',
+  'hd-value': '$239,369',
+  'hd-cost': '$213,390',
+  'hd-pl': '+$25,979',
   'rp-real': '+$2,601',
 };
 
@@ -412,6 +428,26 @@ async function run() {
   if (!hasLots) problems.push('基金卡片沒有分開列單筆與定期定額');
   if (!hasBothAvg) problems.push('基金兩段的平均成本沒有分開算');
 
+  console.log('\n── 美元計價基金要乘匯率 ──');
+  const cardUsd = cards.find((t) => t.includes('天達')) || '';
+  const flatUsd = cardUsd.replace(/\s+/g, ' ');
+  console.log(`  天達卡片：${flatUsd}`);
+
+  const usdOk = flatUsd.includes("USD")
+    && flatUsd.includes('31.424')
+    && flatUsd.includes('$41,468');       // 24.606 × 53.63 × 31.424
+  console.log(`  ${usdOk ? '✅' : '❌'} 標示 USD、列出匯率、市值 $41,468`);
+  if (!usdOk) problems.push(`美元計價基金的市值不對：${flatUsd}`);
+
+  const noRateBug = !flatUsd.includes('$1,320');   // 忘了乘匯率會變成這個數字
+  console.log(`  ${noRateBug ? '✅' : '❌'} 沒有掉進「忘了乘匯率」的算法`);
+  if (!noRateBug) problems.push('美元計價基金沒有乘上匯率');
+
+  // 對帳單的「參考損益」是含配息的：41,468 − 30,000 + 380 = 11,848
+  const hasTotalReturn = flatUsd.includes('含息報酬') && flatUsd.includes('$11,848');
+  console.log(`  ${hasTotalReturn ? '✅' : '❌'} 含息報酬 +$11,848`);
+  if (!hasTotalReturn) problems.push(`含息報酬不對：${flatUsd}`);
+
   console.log('\n── 已出清 ──');
   const closedVisible = await page.locator('#closed-section').isVisible();
   console.log(`  ${closedVisible ? '✅' : '❌'} 出現「已出清」區塊`);
@@ -519,8 +555,8 @@ async function run() {
   await shot(page, '16-抓現價');
 
   // 0056 抓到 55.75 → 3,000 股市值 167,250；00919 32.71 → 32,710
-  // 基金維持手動的 46.2 → 58,801.6，合計 258,762
-  await check(page, 'hd-value', '$258,762', '抓價後總市值');
+  // 基金維持手動：安聯 58,801.6、天達 41,467.7，合計 300,229
+  await check(page, 'hd-value', '$300,229', '抓價後總市值');
 
   const holdText = (await page.locator('.hold').first().innerText()).replace(/\s+/g, ' ');
   console.log(`  0056 卡片：${holdText}`);

@@ -50,6 +50,8 @@ var SHEETS = {
       { key: 'code',      header: '代號',     type: 'text' },
       { key: 'name',      header: '名稱',     type: 'text',   width: 200 },
       { key: 'type',      header: '類型',     type: 'text' },
+      // 計價幣別。美元計價的基金，淨值是美元，算市值要再乘匯率
+      { key: 'currency',  header: '計價幣別', type: 'text' },
       { key: 'frequency', header: '配息頻率', type: 'text' },
       { key: 'status',    header: '狀態',     type: 'text' },
       { key: 'note',      header: '備註',     type: 'text',   width: 200 },
@@ -118,6 +120,8 @@ var SHEETS = {
       { key: 'id',        header: '標的id',   type: 'text',   width: 250 },
       { key: 'code',      header: '標的',     type: 'text' },
       { key: 'price',     header: '價格',     type: 'number' },
+      // 美元計價基金的參考匯率。台幣計價的填 1
+      { key: 'rate',      header: '匯率',     type: 'number' },
       { key: 'updatedAt', header: '更新時間', type: 'text' }
     ]
   }
@@ -229,8 +233,48 @@ function getSheet(entity) {
       }
       if (field.width) sheet.setColumnWidth(i + 1, field.width);
     }
+  } else {
+    ensureColumns(sheet, config);
   }
   return sheet;
+}
+
+/**
+ * 舊版建立的資料表會少掉後來才加的欄位（例如「計價幣別」「匯率」）。
+ * 這裡在正確位置補上，既有資料會跟著右移。
+ *
+ * 少了這一步，新版程式會照新的欄位順序寫入，
+ * 舊表就變成「表頭寫配息頻率、底下卻是計價幣別」的錯位狀態。
+ */
+function ensureColumns(sheet, config) {
+  var lastCol = sheet.getLastColumn();
+  if (!lastCol) return;
+
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  for (var i = 0; i < headers.length; i++) {
+    headers[i] = String(headers[i] === null || headers[i] === undefined ? '' : headers[i]).trim();
+  }
+
+  for (var j = 0; j < config.fields.length; j++) {
+    var field = config.fields[j];
+    if (headers[j] === field.header) continue;            // 位置正確
+    if (headers.indexOf(field.header) !== -1) continue;   // 已存在只是順序不同，不亂動
+
+    if (j >= headers.length) {
+      // 補在最後面
+      if (j + 1 > sheet.getMaxColumns()) sheet.insertColumnAfter(sheet.getMaxColumns());
+      headers.push(field.header);
+    } else {
+      sheet.insertColumnBefore(j + 1);
+      headers.splice(j, 0, field.header);
+    }
+
+    sheet.getRange(1, j + 1).setValue(field.header).setFontWeight('bold');
+    if (field.type === 'date') {
+      sheet.getRange(2, j + 1, Math.max(1, sheet.getMaxRows() - 1), 1).setNumberFormat('@');
+    }
+    if (field.width) sheet.setColumnWidth(j + 1, field.width);
+  }
 }
 
 function listRows(entity) {
