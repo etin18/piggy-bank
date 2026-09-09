@@ -328,6 +328,38 @@ async function run() {
   await page.locator('#trade-sheet [data-close]').click();
   await page.waitForTimeout(400);
 
+  /* 美元計價基金的贖回，欄位照贖回通知單排：
+     0.4950 單位 × USD 200.58 ＝ USD 99.29，再 × 31.575 ＝ TWD 3,135 */
+  console.log('\n── 美元計價基金・賣出 ──');
+  await page.locator('.action[data-action="sell"]').click();
+  await page.waitForTimeout(400);
+  await page.selectOption('#t-instrument', 'i4');
+  await page.waitForTimeout(250);
+
+  const rateVisible = await page.locator('#t-rate-field').isVisible();
+  console.log(`  ${rateVisible ? '✅' : '❌'} 出現匯率欄位`);
+  if (!rateVisible) problems.push('美元計價基金的交易表單沒有匯率欄位');
+
+  await page.fill('#t-qty', '0.4950');
+  await page.fill('#t-price', '200.58');
+  await page.fill('#t-rate', '31.575');
+  await page.waitForTimeout(250);
+
+  const fxHint = (await page.locator('#t-fx-hint').innerText()).trim();
+  const twdAmount = await page.inputValue('#t-amount');
+  const sellCash = await page.inputValue('#t-cash');
+  console.log(`  原幣提示：${fxHint}`);
+  console.log(`  ${fxHint.includes('99.29') ? '✅' : '❌'} 原幣金額 USD 99.29`);
+  console.log(`  ${twdAmount === '3,135' ? '✅' : '❌'} 台幣金額：${twdAmount}`);
+  console.log(`  ${sellCash === '3,135' ? '✅' : '❌'} 帳戶實收：${sellCash}`);
+  if (!fxHint.includes('99.29')) problems.push(`原幣金額算錯：${fxHint}`);
+  if (twdAmount !== '3,135') problems.push(`美元計價的台幣金額算錯：${twdAmount}`);
+  if (sellCash !== '3,135') problems.push(`美元計價的帳戶實收算錯：${sellCash}`);
+  await shot(page, '05b-美元基金賣出');
+
+  await page.locator('#trade-sheet [data-close]').click();
+  await page.waitForTimeout(400);
+
   console.log('\n── 配息表單 ──');
   await page.locator('.action[data-action="dividend"]').click();
   await page.waitForTimeout(400);

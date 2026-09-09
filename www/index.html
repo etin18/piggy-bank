@@ -382,6 +382,13 @@
     <label class="field" id="t-price-field" style="order:2">
       <span class="field__label" id="t-price-label">單價</span>
       <input class="input" id="t-price" type="text" inputmode="decimal" autocomplete="off">
+      <span class="field__hint" id="t-fx-hint"></span>
+    </label>
+
+    <label class="field" id="t-rate-field" style="order:3" hidden>
+      <span class="field__label" id="t-rate-label">匯率</span>
+      <input class="input" id="t-rate" type="text" inputmode="decimal" autocomplete="off">
+      <span class="field__hint" id="t-rate-hint">對帳單上的申購／結匯匯率</span>
     </label>
 
     <label class="field" id="t-qty-field" style="order:3">
@@ -396,25 +403,25 @@
       <span class="field__hint" id="t-qty-hint"></span>
     </label>
 
-    <label class="field" style="order:4">
-      <span class="field__label">手續費<span class="field__opt">選填</span></span>
+    <label class="field" style="order:10">
+      <span class="field__label" id="t-fee-label">手續費<span class="field__opt">選填</span></span>
       <input class="input" id="t-fee" type="text" inputmode="decimal" autocomplete="off" placeholder="0">
-      <span class="field__hint">算進成本，不影響部位價值</span>
+      <span class="field__hint" id="t-fee-hint">算進成本，不影響部位價值</span>
     </label>
 
-    <label class="field" style="order:5">
+    <label class="field" style="order:11">
       <span class="field__label" id="t-cash-label">帳戶實扣</span>
       <input class="input" id="t-cash" type="text" inputmode="decimal" autocomplete="off">
       <span class="field__hint" id="t-cash-hint">自動帶入，改成銀行實際的數字最準</span>
     </label>
 
-    <label class="field" style="order:6">
+    <label class="field" style="order:12">
       <span class="field__label">備註<span class="field__opt">選填</span></span>
       <input class="input" id="t-note" type="text" maxlength="60" autocomplete="off">
     </label>
 
-    <p class="form-error" id="trade-error" hidden style="order:7"></p>
-    <button class="btn btn--submit" type="submit" style="order:8">儲存</button>
+    <p class="form-error" id="trade-error" hidden style="order:13"></p>
+    <button class="btn btn--submit" type="submit" style="order:14">儲存</button>
   </form>
 </div>
 

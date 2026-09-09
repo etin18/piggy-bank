@@ -1267,21 +1267,16 @@ function openTradeSheet({ category, action, record = null }) {
 
   fillInstrumentSelect('t-instrument', category, record ? record.instrumentId : '');
 
-  // 欄位標籤與順序：ETF 照券商的想法（數量→價格→金額），
-  // 基金照銀行對帳單的順序（金額→淨值→單位數）
+  // 欄位標籤與順序照各自的單據來排：
+  //   ETF        券商的想法：數量 → 價格 → 金額
+  //   台幣計價   銀行對帳單：金額 → 淨值 → 單位數
+  //   美元計價   贖回／申購通知：單位數 → 淨值 → 匯率 → 台幣金額
   const isETF = category === ETF;
-  $('t-qty-field').style.order = isETF ? '1' : '3';
-  $('t-price-field').style.order = '2';
-  $('t-amount-field').style.order = isETF ? '3' : '1';
+  const usd = isUsd(record ? instrumentById(record.instrumentId) : null)
+    || (!record && isUsd(instrumentById($('t-instrument').value)));
+  state.draft.usd = usd;
 
-  $('t-qty-label').textContent = isETF ? '數量' : '單位數';
-  $('t-price-label').textContent = isETF ? (isBuy ? '成交價' : '賣出價') : '淨值';
-  $('t-amount-label').textContent = isETF ? '成交金額' : (isBuy ? '申購金額' : '贖回金額');
-  $('t-cash-label').textContent = isBuy ? '帳戶實扣' : '帳戶實收';
-  $('t-cash-hint').textContent = isBuy
-    ? '自動帶入「金額＋手續費」，改成銀行實際扣款最準'
-    : '自動帶入「金額−手續費」，改成實際入帳金額最準';
-  $('t-amount-hint').textContent = isETF ? '' : '對帳單上的申購金額';
+  layoutTradeFields(isETF, usd, isBuy);
 
   $('t-unit-chips').hidden = !isETF;
   $('t-style-field').hidden = isETF;
@@ -1294,6 +1289,7 @@ function openTradeSheet({ category, action, record = null }) {
 
     $('t-qty').value = useLot ? fmtNum(record.quantity / 1000, 3) : fmtNum(record.quantity, 4);
     $('t-price').value = record.price ? fmtNum(record.price, 6) : '';
+    $('t-rate').value = record.rate && record.rate !== 1 ? fmtNum(record.rate, 4) : '';
     $('t-amount').value = record.amount ? fmtNum(record.amount, 2) : '';
     $('t-fee').value = record.fee ? fmtNum(record.fee, 2) : '';
     $('t-cash').value = record.cash ? fmtNum(record.cash, 2) : '';
@@ -1303,7 +1299,7 @@ function openTradeSheet({ category, action, record = null }) {
     // 編輯時不要再自動覆寫使用者當初存的數字
     for (const id of ['t-qty', 't-amount', 't-cash']) $(id).dataset.auto = '0';
   } else {
-    for (const id of ['t-qty', 't-price', 't-amount', 't-fee', 't-cash', 't-note']) $(id).value = '';
+    for (const id of ['t-qty', 't-price', 't-rate', 't-amount', 't-fee', 't-cash', 't-note']) $(id).value = '';
     $('t-date').value = todayStr();
     $('t-initial').checked = false;
     for (const id of ['t-qty', 't-amount', 't-cash']) $(id).dataset.auto = '1';
@@ -1347,8 +1343,11 @@ function recentAmounts(category, action, instrumentId, style, limit = 4) {
 
 function renderAmountQuick() {
   const box = $('t-amount-quick');
-  // 只有基金申購用得上：ETF 的成交金額跟著股價跑，賣出金額更不會重複
-  const useful = state.draft.category === FUND && state.draft.action === BUY;
+  // 只有台幣計價的基金申購用得上：ETF 的成交金額跟著股價跑；
+  // 美元計價的台幣金額是匯率換算出來的，每次都不一樣
+  const useful = state.draft.category === FUND
+    && state.draft.action === BUY
+    && !state.draft.usd;
 
   const amounts = useful
     ? recentAmounts(FUND, BUY, $('t-instrument').value, chipValue('t-style-chips', 'style'))
@@ -1374,6 +1373,38 @@ function syncTradeInitial() {
   }
 }
 
+/** 欄位順序與標籤。美元計價的基金多一格匯率，金額欄變成換匯後的台幣 */
+function layoutTradeFields(isETF, usd, isBuy) {
+  $('t-qty-field').style.order = isETF ? '1' : (usd ? '1' : '3');
+  $('t-price-field').style.order = '2';
+  $('t-rate-field').style.order = '3';
+  $('t-amount-field').style.order = isETF ? '3' : '4';
+  $('t-rate-field').hidden = !usd;
+
+  $('t-qty-label').textContent = isETF ? '數量' : '單位數';
+  $('t-price-label').textContent = isETF
+    ? (isBuy ? '成交價' : '賣出價')
+    : (usd ? (isBuy ? '申購淨值（美元）' : '贖回淨值（美元）') : '淨值');
+  $('t-rate-label').textContent = isBuy ? '申購匯率' : '結匯匯率';
+  $('t-amount-label').textContent = isETF
+    ? '成交金額'
+    : (usd ? '台幣金額' : (isBuy ? '申購金額' : '贖回金額'));
+
+  $('t-cash-label').textContent = isBuy ? '帳戶實扣' : '帳戶實收';
+  $('t-cash-hint').textContent = isBuy
+    ? '自動帶入「金額＋手續費」，改成銀行實際扣款最準'
+    : (usd
+      ? '自動帶入「台幣金額−手續費」，對帳單上的「入帳淨額」最準'
+      : '自動帶入「金額−手續費」，改成實際入帳金額最準');
+
+  $('t-amount-hint').textContent = isETF
+    ? ''
+    : (usd ? '原幣金額 × 匯率，成本與損益都用這個台幣數字算' : '對帳單上的申購金額');
+  $('t-fee-hint').textContent = usd
+    ? '填台幣金額。算進成本，不影響部位價值'
+    : '算進成本，不影響部位價值';
+}
+
 /** 勾了「2025 之前」就用不到日期欄了 */
 function syncInitialToggle(toggleId, dateId, hintId) {
   const on = $(toggleId).checked;
@@ -1386,8 +1417,14 @@ function syncInitialToggle(toggleId, dateId, hintId) {
  * 三個數字欄位互相推算。只動「還沒被手動改過」的欄位（dataset.auto === '1'），
  * 使用者一旦自己輸入，那欄就不再被蓋掉。
  */
+/** 銀行是先把原幣金額四捨五入到分，再乘匯率，跟著做才對得上對帳單的尾數 */
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
 function recalcTrade(changed) {
   const isETF = state.draft.category === ETF;
+  const usd = !!state.draft.usd;
   const isBuy = state.draft.action === BUY;
 
   if (changed) $(changed).dataset.auto = '0';
@@ -1396,6 +1433,7 @@ function recalcTrade(changed) {
   const qtyInput = parseNum($('t-qty').value);
   const qty = qtyInput * unitScale;
   const price = parseNum($('t-price').value);
+  const rate = parseNum($('t-rate').value);
   const amount = parseNum($('t-amount').value);
   const fee = parseNum($('t-fee').value);
 
@@ -1407,6 +1445,14 @@ function recalcTrade(changed) {
       nextAmount = Math.round(qty * price);
       $('t-amount').value = fmtNum(nextAmount, 2);
     }
+  } else if (usd) {
+    // 單位數 × 淨值 × 匯率 → 台幣金額。
+    // 中間不要先把原幣四捨五入（那樣 0.495×200.58×31.575 會變 3,135.08 而不是對帳單的 3,135），
+    // 而且台幣入帳沒有小數，直接取整到元
+    if ($('t-amount').dataset.auto === '1' && qty && price && rate) {
+      nextAmount = Math.round(qty * price * rate);
+      $('t-amount').value = fmtNum(nextAmount, 2);
+    }
   } else {
     // 金額 ÷ 淨值 → 單位數
     if ($('t-qty').dataset.auto === '1' && amount && price) {
@@ -1416,7 +1462,7 @@ function recalcTrade(changed) {
 
   if ($('t-cash').dataset.auto === '1' && nextAmount) {
     const cash = isBuy ? nextAmount + fee : nextAmount - fee;
-    $('t-cash').value = fmtNum(Math.round(cash * 100) / 100, 2);
+    $('t-cash').value = fmtNum(round2(cash), 2);
   }
 
   updateTradeHints();
@@ -1425,6 +1471,20 @@ function recalcTrade(changed) {
 function updateTradeHints() {
   const isETF = state.draft.category === ETF;
   const hint = $('t-qty-hint');
+
+  // 美元計價：把原幣金額算給使用者看，對帳單上就有這個數字，可以直接核對
+  const fxHint = $('t-fx-hint');
+  if (state.draft.usd) {
+    const qty = parseNum($('t-qty').value);
+    const price = parseNum($('t-price').value);
+    fxHint.textContent = qty && price
+      ? `${fmtNum(qty, 4)} × ${fmtNum(price, 4)} ＝ 原幣金額 USD ${fmtNum(round2(qty * price), 2)}`
+      : '';
+    fxHint.classList.toggle('is-calc', !!(qty && price));
+  } else {
+    fxHint.textContent = '';
+    fxHint.classList.remove('is-calc');
+  }
 
   if (!isETF) { hint.textContent = ''; hint.classList.remove('is-calc'); return; }
 
@@ -1460,6 +1520,11 @@ function submitTrade() {
     : (cashInput ? parseNum(cashInput) : (isBuy ? amount + fee : amount - fee));
 
   const inst = instrumentById(instrumentId);
+  const rate = isUsd(inst) ? (parseNum($('t-rate').value) || 0) : 1;
+
+  // 美元計價時 amount 存的是換匯後的台幣，成本與損益都用它算
+  const fallbackAmount = price ? Math.round(quantity * price * (rate || 1)) : 0;
+
   const record = {
     id: state.editing ? state.editing.id : uuid(),
     instrumentId,
@@ -1469,7 +1534,8 @@ function submitTrade() {
     style: state.draft.category === FUND ? chipValue('t-style-chips', 'style') : '',
     quantity,
     price,
-    amount: amount || (price ? quantity * price : 0),
+    rate,
+    amount: amount || fallbackAmount,
     fee,
     cash,
     note: $('t-note').value.trim(),
@@ -2199,8 +2265,18 @@ function bindEvents() {
       state.draft.action = action;
       return;
     }
+    // 選了標的才知道是不是美元計價，欄位要跟著重排
+    state.draft.usd = isUsd(instrumentById(e.target.value));
+    layoutTradeFields(
+      state.draft.category === ETF,
+      state.draft.usd,
+      state.draft.action === BUY
+    );
     renderAmountQuick();   // 換了標的，常用金額跟著換
+    recalcTrade();
   });
+
+  $('t-rate').addEventListener('input', () => recalcTrade());
 
   $('t-amount-quick').addEventListener('click', (e) => {
     const btn = e.target.closest('.quick__btn');

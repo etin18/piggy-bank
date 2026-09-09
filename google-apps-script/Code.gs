@@ -71,6 +71,8 @@ var SHEETS = {
       { key: 'style',        header: '型態',     type: 'text' },
       { key: 'quantity',     header: '數量',     type: 'number' },
       { key: 'price',        header: '單價',     type: 'number' },
+      // 美元計價基金的申購／結匯匯率。台幣計價的填 1
+      { key: 'rate',         header: '匯率',     type: 'number' },
       { key: 'amount',       header: '金額',     type: 'number' },
       { key: 'fee',          header: '手續費',   type: 'number' },
       { key: 'cash',         header: '帳戶金額', type: 'number' },
