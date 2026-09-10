@@ -737,6 +737,20 @@ async function run() {
   if (fetched !== '55.75') problems.push(`單檔抓取填入的價格不對：${fetched}`);
   await shot(page, '17-單檔抓取');
 
+  /* 假後端刻意不回報 apiVersion，模擬「Code.gs 貼了但忘記重新部署」。
+     這正是最難自己發現的狀況 —— 症狀是欄位存不進去、代號的 0 被吃掉 */
+  console.log('\n── 後端版本不符要講出來 ──');
+  await page.locator('#price-sheet [data-close]').click();   // 上一段留著的面板先收掉
+  await page.waitForTimeout(400);
+  await page.locator('#btn-settings').click();
+  await page.waitForTimeout(400);
+  const versionText = (await page.locator('#version-text').innerText()).replace(/\s+/g, ' ');
+  console.log(`  設定頁顯示：${versionText}`);
+  const warned = versionText.includes('舊版') && versionText.includes('重新部署');
+  console.log(`  ${warned ? '✅' : '❌'} 有提醒重新部署`);
+  if (!warned) problems.push(`後端版本不符沒有提醒：${versionText}`);
+  await shot(page, '18-版本提醒');
+
   await browser.close();
 
   console.log('\n' + '─'.repeat(46));

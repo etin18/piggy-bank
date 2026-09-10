@@ -1109,6 +1109,12 @@ button, input, select, textarea {
   text-align: center;
   font-size: 12px;
   color: var(--muted);
+  line-height: 1.7;
+}
+
+.version__warn {
+  color: var(--warn);
+  font-weight: 700;
 }
 
 /* ==========================================================================

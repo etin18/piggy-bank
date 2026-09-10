@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v10';
+const APP_VERSION = 'v11';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -22,6 +22,7 @@ const LS = {
   lastSync: 'pb.lastSync',
   theme: 'pb.theme',
   fields: 'pb.fields',    // 持股頁要顯示哪些資訊，只存在這台裝置
+  apiVersion: 'pb.apiVersion',
   data: 'pb.',            // pb.instruments、pb.trades …
 };
 
@@ -75,6 +76,7 @@ const state = {
   apiUrl: '',
   secret: '',
   lastSync: null,
+  apiVersion: '',        // 後端回報的版本，用來確認 Code.gs 有沒有重新部署
   syncing: false,
   lastError: null,
 
@@ -223,6 +225,7 @@ function loadLocal() {
     state.secret = localStorage.getItem(LS.secret) || '';
     state.lastSync = localStorage.getItem(LS.lastSync) || null;
     state.theme = localStorage.getItem(LS.theme) || 'light';
+    state.apiVersion = localStorage.getItem(LS.apiVersion) || '';
 
     const saved = JSON.parse(localStorage.getItem(LS.fields) || 'null');
     if (Array.isArray(saved)) {
@@ -267,6 +270,11 @@ async function apiCall(payload) {
   });
   if (!res.ok) throw new Error(`連線失敗（${res.status}）`);
   const data = await res.json();
+
+  // 後端每個回應都會帶版本，沒帶就是還沒更新的舊版
+  state.apiVersion = data.apiVersion || '舊版';
+  try { localStorage.setItem(LS.apiVersion, state.apiVersion); } catch (err) { /* 無妨 */ }
+
   if (!data.ok) {
     const err = new Error(data.error || '伺服器回報錯誤');
     if (data.authError) err.authError = true; // 密語錯誤，讓上層特別提示
@@ -1210,8 +1218,15 @@ function renderSettings() {
     ? new Date(state.lastSync).toLocaleString('zh-TW', { hour12: false }).replace(/:\d\d$/, '')
     : '—';
 
-  // 版本號放這裡，手機上懷疑「是不是還在用舊版」時可以直接對
-  $('version-text').textContent = `存錢筒 ${APP_VERSION} · 資料存於你的 Google 試算表`;
+  // 前後端版本並排。兩邊對不起來的話，多半是 Code.gs 貼了但忘記重新部署，
+  // 那會冒出一堆看起來莫名其妙的症狀（欄位存不進去、代號的 0 被吃掉）
+  const api = state.apiVersion;
+  const stale = api && api !== APP_VERSION;
+  $('version-text').innerHTML = api
+    ? `存錢筒 ${APP_VERSION} · 後端 ${escapeHtml(api)}${
+        stale ? '<br><span class="version__warn">後端版本不符，請重新部署 Code.gs</span>' : ''
+      }`
+    : `存錢筒 ${APP_VERSION} · 資料存於你的 Google 試算表`;
 
   const list = live('instruments');
   $('instrument-list').innerHTML = list.length

@@ -30,6 +30,13 @@
 
 var SECRET = '';   // ← 改成你自己的通關密語，例如 'piggy2026kk'
 
+/**
+ * 後端版本。App 的設定頁會把它跟自己的版本並排顯示，
+ * 用來確認這份程式有沒有真的重新部署上去 ——
+ * 貼了新程式卻忘了「部署 → 管理部署作業 → 新版本」的話，跑的還是舊的。
+ */
+var API_VERSION = 'v11';
+
 /* ==========================================================================
    資料表定義
 
@@ -196,6 +203,7 @@ function route(payload) {
 }
 
 function respond(obj) {
+  obj.apiVersion = API_VERSION;   // 每個回應都帶著，App 才知道後端是哪一版
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
