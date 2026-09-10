@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v11';
+const APP_VERSION = 'v12';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -27,25 +27,18 @@ const LS = {
 };
 
 /**
- * 持股卡片上可以自己開關的資訊。
- * 持有數量和上方的損益一定會顯示，不放進來。
+ * 展開後那行小字要顯示哪些單價資訊。
+ *
+ * 投入、現值、配息、損益已經固定在損益拆解裡，不放進來讓人勾 ——
+ * 那些是主結構，關掉的話拆解就不成立了。
  */
 const HOLDING_FIELDS = [
   { key: 'avg', label: '平均成本', hint: '每單位' },
   { key: 'price', label: '現價／淨值', hint: '' },
   { key: 'rate', label: '匯率', hint: '美元計價才有' },
-  { key: 'value', label: '市值', hint: '' },
-  { key: 'cost', label: '投入成本', hint: '' },
-  { key: 'dividends', label: '累計配息', hint: '' },
-  { key: 'total', label: '含息報酬', hint: '對帳單的參考損益' },
 ];
 
-/**
- * 預設開這些。匯率留著是因為美元計價的基金看不到匯率，
- * 就不知道市值是怎麼換算出來的（台幣計價的本來就不會顯示那一格）。
- * 累計配息預設關起來 —— 報表頁看得到，而且含息報酬已經把它算進去了。
- */
-const DEFAULT_FIELDS = ['avg', 'price', 'rate', 'value', 'cost', 'total'];
+const DEFAULT_FIELDS = ['avg', 'price', 'rate'];
 
 /** 五張表的名字，同步與本機儲存都照這個順序跑 */
 const ENTITIES = ['instruments', 'trades', 'dividends', 'cashflows', 'prices'];
@@ -91,6 +84,7 @@ const state = {
   detailFilter: 'all',
   returnToDetail: null,  // 關掉編輯面板後要回到哪一檔的明細
   detailScroll: 0,       // 明細列表捲到哪，返回時停回原位
+  expanded: new Set(),   // 持股頁展開了哪幾檔
 
   editing: null,         // { entity, id } 正在編輯的紀錄
   draft: {},             // 表單暫存：category、action、unit、style…
@@ -992,10 +986,14 @@ function renderHoldings() {
 
   const value = held.reduce((s, p) => s + (p.hasPrice ? p.value : p.cost), 0);
   const cost = held.reduce((s, p) => s + p.cost, 0);
+  const dividends = held.reduce((s, p) => s + p.dividends, 0);
 
+  // 跟每張卡片的主數字用同一種算法（含配息），
+  // 不然上面寫「未實現」、下面寫「含息」，同一頁兩套標準會看不懂
   $('hd-value').textContent = fmtMoney(value);
   $('hd-cost').textContent = fmtMoney(cost);
-  setPL($('hd-pl'), value - cost);
+  $('hd-div').textContent = fmtMoney(dividends);
+  setPL($('hd-pl'), value - cost + dividends);
 
   const closed = closedRounds();
   $('holdings-empty').hidden = held.length > 0 || closed.length > 0;
@@ -1054,6 +1052,14 @@ function plHtml(amount, base, { cls = 'hold__pl' } = {}) {
   return `<span class="${cls} ${tone}">${fmtMoney(v, { sign: true })}${pctHtml}</span>`;
 }
 
+/**
+ * 一檔一列，點了才展開細節。
+ *
+ * 收合時只有「名字 ＋ 賺賠多少」，一個畫面掃得完；
+ * 展開後把損益拆成「價格漲跌 ＋ 配息」，
+ * 不然像 0826 那種「價格在跌、配息補回來還有賺」的狀況，
+ * 兩個顏色相反的數字並排會看不懂到底是賺是賠。
+ */
 function holdingHtml(card) {
   const inst = card.instrument;
   const isETF = card.type === ETF;
@@ -1074,65 +1080,112 @@ function holdingHtml(card) {
   const row = priceRow(inst.id);
   const updated = row && row.updatedAt ? fmtDate(String(row.updatedAt).slice(0, 10)) : '';
 
-  // 同一檔基金有單筆也有定期定額時，上面顯示合計、下面拆開列
-  const split = lots.length > 1;
+  const split = lots.length > 1;   // 同一檔基金既有單筆也有定期定額
   const singleStyle = !split && card.type === FUND ? styleLabel(lots[0].style) : '';
+  const open = state.expanded.has(inst.id);
 
-  const cell = (label, value, extra = '') =>
-    `<span class="hold__cell ${extra}"><span>${label}</span><span class="hold__num">${value}</span></span>`;
+  const unrealized = value - cost;
+  const total = unrealized + dividends;      // 含息，對得上對帳單的「參考損益」
 
+  const tags = [
+    singleStyle ? `<span class="hold__tag">${singleStyle}</span>` : '',
+    usd ? '<span class="hold__tag hold__tag--usd">USD</span>' : '',
+  ].join('');
+
+  /* ---------- 收合時看到的那一列 ---------- */
+
+  const headline = hasPrice
+    ? `<span class="hold__amount ${toneOf(total)}">${fmtMoney(total, { sign: true })}</span>
+       <span class="hold__pct ${toneOf(total)}">${fmtPct(total, cost)}</span>`
+    : '<span class="hold__amount is-flat">—</span><span class="hold__pct is-flat">未填價</span>';
+
+  const summary = [fmtQty(card.type, qty), hasPrice ? fmtMoney(value) : ''].filter(Boolean).join(' · ');
+
+  /* ---------- 展開後的損益拆解 ---------- */
+
+  const line = (label, value, extra = '') =>
+    `<div class="split-row ${extra}"><span>${label}</span><span>${value}</span></div>`;
+
+  const detail = [];
+
+  if (hasPrice) {
+    detail.push(`
+      <div class="flow">
+        <span class="flow__side"><small>投入</small>${fmtMoney(cost)}</span>
+        <span class="flow__arrow" aria-hidden="true">→</span>
+        <span class="flow__side flow__side--end"><small>現值</small>${fmtMoney(value)}</span>
+      </div>`);
+
+    detail.push(line('價格漲跌',
+      `<b class="${toneOf(unrealized)}">${fmtMoney(unrealized, { sign: true })}
+        <small>${fmtPct(unrealized, cost)}</small></b>`));
+    detail.push(line('領到的配息', `<b>${fmtMoney(dividends)}</b>`));
+    detail.push(line('合計',
+      `<b class="${toneOf(total)}">${fmtMoney(total, { sign: true })}
+        <small>${fmtPct(total, cost)}</small></b>`, 'split-row--total'));
+  } else {
+    detail.push(line('投入成本', `<b>${fmtMoney(cost)}</b>`));
+    detail.push(line('領到的配息', `<b>${fmtMoney(dividends)}</b>`));
+    detail.push(`<p class="hold__note">還沒填${priceLabel}，算不出市值和損益</p>`);
+  }
+
+  // 單價資訊放小字：知道成本和現價各是多少，但不搶主數字的版面
   const on = (key) => state.fields.includes(key);
-  const cells = [cell('持有', fmtQty(card.type, qty))];
-
-  // 美元計價的成本是台幣、淨值是美元，兩個數字不能並排比較，
-  // 所以標題直接寫清楚是「每單位台幣成本」
+  const facts = [];
   if (on('avg') && !split) {
-    cells.push(cell(usd ? '每單位成本' : '平均成本', fmtNum(lots[0].avgPrice, usd ? 2 : 4)));
+    facts.push(`${usd ? '每單位成本' : '平均成本'} ${fmtNum(lots[0].avgPrice, usd ? 2 : 4)}`);
   }
-  if (on('price')) cells.push(cell(priceLabel, price > 0 ? fmtNum(price, 4) : '未填'));
-  if (on('rate') && usd) cells.push(cell('匯率', rate > 0 ? fmtNum(rate, 4) : '未填'));
-  if (on('value')) cells.push(cell('市值', hasPrice ? fmtMoney(value) : '—'));
-  if (on('cost')) cells.push(cell('投入成本', fmtMoney(cost)));
-  if (on('dividends')) cells.push(cell('累計配息', fmtMoney(dividends)));
+  if (on('price')) facts.push(`${priceLabel} ${price > 0 ? fmtNum(price, 4) : '未填'}`);
+  if (on('rate') && usd) facts.push(`匯率 ${rate > 0 ? fmtNum(rate, 4) : '未填'}`);
+  if (facts.length) detail.push(`<p class="hold__facts">${escapeHtml(facts.join(' · '))}</p>`);
 
-  // 對帳單上的「參考損益」是含配息的，這格才對得起來。
-  // 佔滿一整行，不然「含息報酬」四個字會在窄格子裡折行
-  if (on('total') && hasPrice) {
-    cells.push(cell(
-      '含息報酬',
-      plHtml(value - cost + dividends, cost, { cls: 'hold__inline-pl' }),
-      'hold__cell--wide'
-    ));
-  }
+  if (split) detail.push(`<div class="lots">${lots.map((p) => lotHtml(p, hasPrice)).join('')}</div>`);
 
   const notes = [];
   if (hasEstimate) notes.push('含 2025 之前概估期初，成本僅供參考');
   if (Math.round(past) !== 0) notes.push(`過去已實現 ${fmtMoney(past, { sign: true })}`);
+  if (notes.length) detail.push(`<p class="hold__note">${escapeHtml(notes.join(' · '))}</p>`);
 
   return `
-    <div class="hold ${isETF ? 'hold--etf' : 'hold--fund'}">
-      <div class="hold__head">
-        <span class="hold__name hold__name--link" data-detail-id="${escapeHtml(inst.id)}"
-              role="button" tabindex="0">${escapeHtml(inst.name || '未命名')}${
-          inst.code ? `<span class="hold__code">${escapeHtml(inst.code)}</span>` : ''
-        }${singleStyle ? `<span class="hold__tag">${singleStyle}</span>` : ''}${
-          usd ? '<span class="hold__tag hold__tag--usd">USD</span>' : ''
-        }</span>
-        ${hasPrice ? plHtml(value - cost, cost) : '<span class="hold__pl is-flat">—</span>'}
-      </div>
+    <div class="hold ${isETF ? 'hold--etf' : 'hold--fund'} ${open ? 'is-open' : ''}">
+      <button class="hold__row" type="button" data-toggle-id="${escapeHtml(inst.id)}"
+              aria-expanded="${open ? 'true' : 'false'}">
+        <svg class="hold__caret" viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+          <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="hold__main">
+          <span class="hold__name">${escapeHtml(inst.name || '未命名')}${
+            inst.code ? `<span class="hold__code">${escapeHtml(inst.code)}</span>` : ''
+          }${tags}</span>
+          <span class="hold__sub">${escapeHtml(summary)}</span>
+        </span>
+        <span class="hold__figures">${headline}</span>
+      </button>
 
-      <div class="hold__grid">${cells.join('')}</div>
-
-      ${split ? `<div class="lots">${lots.map((p) => lotHtml(p, hasPrice)).join('')}</div>` : ''}
-
-      <div class="hold__foot">
-        <span class="hold__note">${escapeHtml(notes.join(' · '))}</span>
-        <button class="hold__price-btn ${hasPrice ? '' : 'is-missing'}" type="button"
-                data-price-id="${escapeHtml(inst.id)}">
-          ${hasPrice ? `更新${priceLabel}${updated ? ` · ${updated}` : ''}` : `填${priceLabel}`}
-        </button>
+      <div class="hold__detail" ${open ? '' : 'hidden'}>
+        ${detail.join('')}
+        <div class="hold__foot">
+          <button class="linkbtn" type="button" data-detail-id="${escapeHtml(inst.id)}">
+            所有紀錄 ›
+          </button>
+          <button class="hold__price-btn ${hasPrice ? '' : 'is-missing'}" type="button"
+                  data-price-id="${escapeHtml(inst.id)}">
+            ${hasPrice ? `更新${priceLabel}${updated ? ` · ${updated}` : ''}` : `填${priceLabel}`}
+          </button>
+        </div>
       </div>
     </div>`;
+}
+
+function toneOf(amount) {
+  const v = Math.round(amount);
+  return v > 0 ? 'is-gain' : (v < 0 ? 'is-loss' : 'is-flat');
+}
+
+function fmtPct(amount, base) {
+  if (!base) return '';
+  const pct = (amount / base) * 100;
+  return `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`;
 }
 
 function styleLabel(style) {
@@ -2522,11 +2575,18 @@ function bindEvents() {
     renderHoldings();
   });
 
-  // 點標的名稱看那一檔的完整紀錄（持股中和已出清的都可以）
+  // 點卡片展開／收合；展開後的「所有紀錄」才進明細面板
   for (const id of ['holdings-list', 'closed-list']) {
     $(id).addEventListener('click', (e) => {
       const link = e.target.closest('[data-detail-id]');
-      if (link) openDetailSheet(link.dataset.detailId);
+      if (link) return openDetailSheet(link.dataset.detailId);
+
+      const toggle = e.target.closest('[data-toggle-id]');
+      if (!toggle) return;
+      const instrumentId = toggle.dataset.toggleId;
+      if (state.expanded.has(instrumentId)) state.expanded.delete(instrumentId);
+      else state.expanded.add(instrumentId);
+      renderHoldings();
     });
   }
 

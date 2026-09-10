@@ -169,7 +169,9 @@ const SEED = {
 
    總市值 114,600 +24,500 +58,801.6 +41,467.7 ＝ 239,369
    總成本 110,357 +22,933 +50,100 +30,000    ＝ 213,390
-   未實現 ＝ +25,979 */
+   持有部位的配息 6,404 + 616 + 278 + 380 ＝ 7,678
+                （00919 那 713 歸在已出清的第一段，不算在現在的部位裡）
+   含息報酬 ＝ 239,369 − 213,390 + 7,678 ＝ +33,657 */
 const EXPECT = {
   'summary-total': '$8,391',
   'summary-avg': '$932',
@@ -180,7 +182,7 @@ const EXPECT = {
   'bal-fund': '$21,174',
   'hd-value': '$239,369',
   'hd-cost': '$213,390',
-  'hd-pl': '+$25,979',
+  'hd-pl': '+$33,657',
   'rp-real': '+$2,601',
 };
 
@@ -428,10 +430,23 @@ async function run() {
   console.log('\n── 持股頁 ──');
   await page.locator('.tab[data-page="holdings"]').click();
   await page.waitForTimeout(300);
+
+  // 收合時只看得到「名字 ＋ 賺賠多少」，細節要展開才在
+  const expandAll = async () => {
+    const rows = await page.locator('.hold__row').all();
+    for (const row of rows) {
+      if ((await row.getAttribute('aria-expanded')) !== 'true') {
+        await row.click();
+        await page.waitForTimeout(120);
+      }
+    }
+  };
+  await shot(page, '09-持股-收合');
+  await expandAll();
   await shot(page, '09-持股');
   await check(page, 'hd-value', EXPECT['hd-value'], '總市值');
   await check(page, 'hd-cost', EXPECT['hd-cost'], '總成本');
-  await check(page, 'hd-pl', EXPECT['hd-pl'], '未實現損益');
+  await check(page, 'hd-pl', EXPECT['hd-pl'], '含息報酬');
 
   await check(page, 'rp-real', EXPECT['rp-real'], '已實現損益');
 
@@ -484,9 +499,9 @@ async function run() {
   if (!noRateBug) problems.push('美元計價基金沒有乘上匯率');
 
   // 對帳單的「參考損益」是含配息的：41,468 − 30,000 + 380 = 11,848
-  const hasTotalReturn = flatUsd.includes('含息報酬') && flatUsd.includes('$11,848');
-  console.log(`  ${hasTotalReturn ? '✅' : '❌'} 含息報酬 +$11,848`);
-  if (!hasTotalReturn) problems.push(`含息報酬不對：${flatUsd}`);
+  const hasTotalReturn = flatUsd.includes('合計') && flatUsd.includes('$11,848');
+  console.log(`  ${hasTotalReturn ? '✅' : '❌'} 含息合計 +$11,848`);
+  if (!hasTotalReturn) problems.push(`含息合計不對：${flatUsd}`);
 
   console.log('\n── 已出清 ──');
   const closedVisible = await page.locator('#closed-section').isVisible();
@@ -509,7 +524,7 @@ async function run() {
   await shot(page, '09b-已出清');
 
   console.log('\n── 單一標的的完整紀錄 ──');
-  await page.locator('.hold__name--link').first().click();
+  await page.locator('.hold [data-detail-id]').first().click();
   await page.waitForTimeout(400);
   const detailTitle = (await page.locator('#detail-sheet-title').innerText()).trim();
   const detailCount = await page.locator('#detail-list .entry').count();
@@ -601,23 +616,30 @@ async function run() {
   if (stillOpen) problems.push('明細按關閉沒有離開');
 
   console.log('\n── 自選顯示欄位 ──');
-  const cellsBefore = await page.locator('.hold').first().locator('.hold__cell').count();
+  await expandAll();
+  const factsOf = () => page.locator('.hold__facts').first().innerText();
+  const factsBefore = (await factsOf()).replace(/\s+/g, ' ');
+
   await page.locator('#btn-fields').click();
   await page.waitForTimeout(400);
   await shot(page, '09d-顯示欄位');
 
   // checkbox 本身是隱藏的（外觀做在自訂方塊上），要點 label
-  await page.locator('#field-toggles label:has(input[data-field="dividends"])').click();
+  await page.locator('#field-toggles label:has(input[data-field="avg"])').click();
   await page.waitForTimeout(300);
   await page.locator('#fields-sheet [data-close]').click();
   await page.waitForTimeout(400);
-  const cellsAfter = await page.locator('.hold').first().locator('.hold__cell').count();
-  console.log(`  ${cellsAfter === cellsBefore + 1 ? '✅' : '❌'} 勾選「累計配息」後格子從 ${cellsBefore} 變 ${cellsAfter}`);
-  if (cellsAfter !== cellsBefore + 1) problems.push(`勾選欄位沒有生效：${cellsBefore} → ${cellsAfter}`);
+  await expandAll();
+
+  const factsAfter = (await factsOf()).replace(/\s+/g, ' ');
+  const hidden = factsBefore.includes('平均成本') && !factsAfter.includes('平均成本');
+  console.log(`  ${hidden ? '✅' : '❌'} 取消「平均成本」後那行小字跟著變`);
+  console.log(`    ${factsBefore} → ${factsAfter}`);
+  if (!hidden) problems.push(`取消欄位沒有生效：${factsBefore} → ${factsAfter}`);
 
   const persisted = await page.evaluate(() => localStorage.getItem('pb.fields'));
-  console.log(`  ${persisted && persisted.includes('dividends') ? '✅' : '❌'} 設定有存起來：${persisted}`);
-  if (!persisted || !persisted.includes('dividends')) problems.push('顯示欄位設定沒有存到 localStorage');
+  console.log(`  ${persisted && !persisted.includes('avg') ? '✅' : '❌'} 設定有存起來：${persisted}`);
+  if (!persisted || persisted.includes('avg')) problems.push('顯示欄位設定沒有存到 localStorage');
 
   console.log('\n── 更新現價 ──');
   await page.locator('.hold__price-btn').first().click();
@@ -703,6 +725,8 @@ async function run() {
 
   await page.locator('#btn-refresh-prices').click();
   await page.waitForTimeout(900);
+  await shot(page, '16-抓現價-收合');
+  await expandAll();
   await shot(page, '16-抓現價');
 
   // 0056 抓到 55.75 → 3,000 股市值 167,250；00919 32.71 → 32,710
@@ -718,6 +742,7 @@ async function run() {
   // 同步一輪之後再看一次，確認沒有被伺服器的舊值蓋回去
   await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await page.waitForTimeout(900);
+  await expandAll();
   const stillThere = (await page.locator('.hold').first().innerText()).includes('55.75');
   console.log(`  ${stillThere ? '✅' : '❌'} 同步一輪後現價沒有被蓋回舊值`);
   if (!stillThere) problems.push('同步後現價被伺服器舊值蓋掉');
