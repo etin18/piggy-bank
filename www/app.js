@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v16';
+const APP_VERSION = 'v17';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -533,6 +533,7 @@ function buildRounds(trades) {
     realized: 0,
     dividends: 0,
     hasEstimate: false,
+    oversold: false,   // 有賣超過持有量，損益不準
     closed: false,
   });
 
@@ -544,6 +545,10 @@ function buildRounds(trades) {
       const avgCost = cur.qty > EPS ? cur.cost / cur.qty : 0;
       const avgExFee = cur.qty > EPS ? cur.costExFee / cur.qty : 0;
       const sold = Math.min(qty, cur.qty);
+
+      // 賣得比手上還多，多出來的部分沒有成本可以扣，損益會虛高。
+      // 通常是漏記了某一筆買進，要講出來而不是默默算下去
+      if (qty > cur.qty + EPS) cur.oversold = true;
 
       // 錢是實收的全額，成本只能扣掉真正賣掉的那部分
       cur.realized += (Number(t.cash) || 0) - sold * avgCost;
@@ -670,6 +675,9 @@ function buildPositions() {
       unrealized: priced ? value - cost : null,
       dividends: current ? current.dividends : 0,
       hasEstimate: current ? current.hasEstimate : false,
+      oversold: rounds.some((r) => r.oversold),
+      // 有持股卻沒有成本（期初只填了數量），損益算出來是假的
+      costUnknown: !!current && current.qty > EPS && current.cost <= 0,
       pastRealized: closed.reduce((sum, r) => sum + r.realized, 0),
       allDividends: rounds.reduce((sum, r) => sum + r.dividends, 0),
     });
@@ -820,7 +828,18 @@ function renderRecent() {
   const shown = showAll ? entries : entries.slice(0, RECENT_LIMIT);
 
   $('recent-title').textContent = state.category ? `最近的${state.category}紀錄` : '最近紀錄';
-  $('record-empty').hidden = entries.length > 0 || live('trades').length > 0;
+
+  // 選了類別卻空空如也時也要講一句，不然只剩一片空白，會以為是壞掉
+  $('record-empty').hidden = entries.length > 0;
+  if (!entries.length) {
+    const brandNew = !live('trades').length && !live('dividends').length && !live('cashflows').length;
+    $('record-empty-title').textContent = brandNew
+      ? '還沒有任何紀錄'
+      : `還沒有${state.category || ''}的紀錄`;
+    $('record-empty-hint').textContent = state.category
+      ? '從上面選買進、賣出或配息開始記'
+      : '選 ETF 或基金，記下第一筆';
+  }
 
   list.innerHTML = shown.map(entryHtml).join('');
 
@@ -1035,6 +1054,19 @@ function renderHoldings() {
   $('holdings-empty').hidden = held.length > 0 || closed.length > 0;
   $('holdings-totals').hidden = held.length === 0;
 
+  /* 標的在試算表被刪掉、交易卻還在的話，那些錢照樣扣了帳戶餘額，
+     持股卻找不到它們 —— 帳目對不起來又查無原因，所以要講出來 */
+  const orphans = live('trades').filter((t) => !instrumentById(t.instrumentId));
+  const orphanNote = $('orphan-note');
+  orphanNote.hidden = orphans.length === 0;
+  if (orphans.length) {
+    const amount = orphans.reduce((s, t) => s + Math.abs(Number(t.cash) || 0), 0);
+    orphanNote.textContent =
+      `有 ${orphans.length} 筆交易找不到對應的標的（金額共 ${fmtMoney(amount)}）。`
+      + '它們仍然算進帳戶餘額，但不會出現在持股裡。'
+      + '多半是標的在試算表被刪掉了 —— 把標的加回來，或把那幾筆紀錄刪掉。';
+  }
+
   // 有 ETF 才顯示「更新現價」—— 基金沒有公開報價可抓。
   // 顯示設定那顆按鈕只要有持股就在
   const etfs = held.filter((p) => p.type === ETF);
@@ -1130,10 +1162,18 @@ function holdingHtml(card) {
 
   /* ---------- 收合時看到的那一列 ---------- */
 
-  const headline = hasPrice
-    ? `<span class="hold__amount ${toneOf(total)}">${fmtMoney(total, { sign: true })}</span>
-       <span class="hold__pct ${toneOf(total)}">${fmtPct(total, cost)}</span>`
-    : '<span class="hold__amount is-flat">—</span><span class="hold__pct is-flat">未填價</span>';
+  // 沒有成本就沒有「賺賠」可言，硬算出來的數字只會騙人
+  const costUnknown = lots.some((p) => p.costUnknown);
+
+  let headline;
+  if (costUnknown) {
+    headline = '<span class="hold__amount is-flat">—</span><span class="hold__pct is-flat">缺成本</span>';
+  } else if (hasPrice) {
+    headline = `<span class="hold__amount ${toneOf(total)}">${fmtMoney(total, { sign: true })}</span>
+       <span class="hold__pct ${toneOf(total)}">${fmtPct(total, cost)}</span>`;
+  } else {
+    headline = '<span class="hold__amount is-flat">—</span><span class="hold__pct is-flat">未填價</span>';
+  }
 
   const summary = [fmtQty(card.type, qty), hasPrice ? fmtMoney(value) : ''].filter(Boolean).join(' · ');
 
@@ -1144,7 +1184,13 @@ function holdingHtml(card) {
 
   const detail = [];
 
-  if (hasPrice) {
+  if (costUnknown) {
+    detail.push(line('持有', fmtQty(card.type, qty)));
+    if (hasPrice) detail.push(line('目前市值', `<b>${fmtMoney(value)}</b>`));
+    detail.push(line('領到的配息', `<b>${fmtMoney(dividends)}</b>`));
+    detail.push(`<p class="hold__note">這個部位沒有成本資料（期初只填了數量），
+      算不出賺賠。到「所有紀錄」把期初那筆的金額補上就會出現。</p>`);
+  } else if (hasPrice) {
     detail.push(`
       <div class="flow">
         <span class="flow__side"><small>投入</small>${fmtMoney(cost)}</span>
@@ -1179,6 +1225,9 @@ function holdingHtml(card) {
 
   const notes = [];
   if (hasEstimate) notes.push('含 2025 之前概估期初，成本僅供參考');
+  if (lots.some((p) => p.oversold)) {
+    notes.push('有一筆賣出超過當時的持有量，多賣的部分沒有成本可扣，損益偏高 —— 可能漏記了買進');
+  }
   if (Math.round(past) !== 0) notes.push(`過去已實現 ${fmtMoney(past, { sign: true })}`);
   if (notes.length) detail.push(`<p class="hold__note">${escapeHtml(notes.join(' · '))}</p>`);
 
@@ -1272,6 +1321,8 @@ function renderClosed(rounds) {
       period,
       `曾持有 ${fmtQty(position.type, round.peakQty)}`,
       round.dividends ? `期間配息 ${fmtMoney(round.dividends)}` : '',
+      // 超賣的那一段賣完就進這裡，警告要跟著過來
+      round.oversold ? '賣出超過持有量，損益偏高' : '',
     ].filter(Boolean).join(' · ');
 
     return `

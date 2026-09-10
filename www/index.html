@@ -131,8 +131,8 @@
             <path d="M20 12c0-2.2 1.8-4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
         </div>
-        <p class="empty__title">還沒有任何紀錄</p>
-        <p class="empty__hint">選 ETF 或基金，記下第一筆</p>
+        <p class="empty__title" id="record-empty-title">還沒有任何紀錄</p>
+        <p class="empty__hint" id="record-empty-hint">選 ETF 或基金，記下第一筆</p>
       </div>
     </section>
 
@@ -219,6 +219,8 @@
           <span class="toggle__hint" id="fee-hint"></span>
         </label>
       </div>
+
+      <p class="warn-note" id="orphan-note" hidden></p>
 
       <div class="hold-tools" id="hold-tools" hidden>
         <button class="btn btn--quote" id="btn-refresh-prices" type="button" hidden>

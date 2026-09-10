@@ -223,6 +223,9 @@ PW_CORE=<playwright-core 路徑> node scripts/screenshot.js
 
 # 底部面板下拉關閉手勢（用 CDP 送真觸控事件）
 PW_CORE=<playwright-core 路徑> node scripts/test-sheet-drag.js
+
+# 邊界情況：故意灌不乾淨的資料，看會不會算錯或壞掉
+PW_CORE=<playwright-core 路徑> node scripts/test-edge.js
 ```
 
 `screenshot.js` 會灌入一份手算過的假資料（含期初概估、定期定額、季配與月配），
