@@ -14,7 +14,16 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v18';
+const APP_VERSION = 'v19';
+
+/**
+ * 後端最後一次「真的需要重新部署」的版本。
+ *
+ * 只改前端的版本不該連帶要求重貼 Code.gs —— 兩邊版號要求完全相等的話，
+ * 每次前端小改版都會冒出「後端版本不符」，久了就沒人理那個警告了。
+ * 只有動到 Code.gs 的邏輯或欄位時，才把這個數字提上來。
+ */
+const REQUIRED_API_VERSION = 'v16';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -174,6 +183,11 @@ function fmtQty(type, qty) {
   if (type === FUND) return fmtNum(v, 4) + ' 單位';
   if (v >= 1000 && v % 1000 === 0) return fmtNum(v / 1000, 2) + ' 張';
   return fmtNum(v, 0) + ' 股';
+}
+
+/** 'v16' → 16。認不出來的（例如舊版回報的空字串）當成 0，也就是最舊 */
+function versionNumber(v) {
+  return Number(String(v || '').replace(/\D/g, '')) || 0;
 }
 
 /** ISO 時間戳 → 「9/9 09:05」，給「上次更新」用 */
@@ -1358,13 +1372,13 @@ function renderSettings() {
     ? new Date(state.lastSync).toLocaleString('zh-TW', { hour12: false }).replace(/:\d\d$/, '')
     : '—';
 
-  // 前後端版本並排。兩邊對不起來的話，多半是 Code.gs 貼了但忘記重新部署，
-  // 那會冒出一堆看起來莫名其妙的症狀（欄位存不進去、代號的 0 被吃掉）
+  // 後端太舊會冒出一堆看起來莫名其妙的症狀（欄位存不進去、代號的 0 被吃掉），
+  // 所以在這裡把版本攤開來，但只有真的過舊才叫人去重新部署
   const api = state.apiVersion;
-  const stale = api && api !== APP_VERSION;
+  const stale = api && versionNumber(api) < versionNumber(REQUIRED_API_VERSION);
   $('version-text').innerHTML = api
     ? `存錢筒 ${APP_VERSION} · 後端 ${escapeHtml(api)}${
-        stale ? '<br><span class="version__warn">後端版本不符，請重新部署 Code.gs</span>' : ''
+        stale ? '<br><span class="version__warn">後端版本太舊，請重新部署 Code.gs</span>' : ''
       }`
     : `存錢筒 ${APP_VERSION} · 資料存於你的 Google 試算表`;
 

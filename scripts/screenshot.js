@@ -823,7 +823,7 @@ async function run() {
   await page.waitForTimeout(400);
   const versionText = (await page.locator('#version-text').innerText()).replace(/\s+/g, ' ');
   console.log(`  設定頁顯示：${versionText}`);
-  const warned = versionText.includes('舊版') && versionText.includes('重新部署');
+  const warned = versionText.includes('舊版') && versionText.includes('太舊');
   console.log(`  ${warned ? '✅' : '❌'} 有提醒重新部署`);
   if (!warned) problems.push(`後端版本不符沒有提醒：${versionText}`);
   await shot(page, '18-版本提醒');
