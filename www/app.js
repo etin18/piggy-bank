@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v8';
+const APP_VERSION = 'v9';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -87,6 +87,8 @@ const state = {
   fields: DEFAULT_FIELDS.slice(),   // 持股卡片顯示哪些資訊
   detailId: null,        // 正在看明細的標的
   detailFilter: 'all',
+  returnToDetail: null,  // 關掉編輯面板後要回到哪一檔的明細
+  detailScroll: 0,       // 明細列表捲到哪，返回時停回原位
 
   editing: null,         // { entity, id } 正在編輯的紀錄
   draft: {},             // 表單暫存：category、action、unit、style…
@@ -1226,13 +1228,28 @@ function renderSettings() {
    標的明細：某一檔的所有買賣與配息
    ========================================================================== */
 
-function openDetailSheet(instrumentId) {
+function openDetailSheet(instrumentId, { restoreScroll = false } = {}) {
   if (!instrumentById(instrumentId)) return;
   state.editing = null;   // 這是檢視用的面板，沒有在編輯任何一筆
   state.detailId = instrumentId;
-  state.detailFilter = 'all';
+  if (!restoreScroll) {
+    state.detailFilter = 'all';
+    state.detailScroll = 0;
+  }
+
   renderDetail();
   openSheet('detail-sheet');
+
+  // 從編輯面板回來時停回原本捲到的位置 —— 列表可能有幾十筆，
+  // 每次都彈回最上面等於要重找一次
+  const body = $('detail-sheet').querySelector('.sheet__body');
+  requestAnimationFrame(() => { body.scrollTop = restoreScroll ? state.detailScroll : 0; });
+}
+
+/** 離開明細去編輯之前，記住是哪一檔、捲到哪，等一下要回來 */
+function rememberDetailPosition() {
+  state.returnToDetail = state.detailId;
+  state.detailScroll = $('detail-sheet').querySelector('.sheet__body').scrollTop;
 }
 
 function detailEntries() {
@@ -1345,8 +1362,17 @@ function saveFields() {
 
 let openSheetId = null;
 
+/**
+ * 換面板時內部會先關掉舊的，那不是使用者按下的「關閉」，
+ * 所以不該觸發「回到上一層」。
+ */
+let switchingSheet = false;
+
 function openSheet(id) {
+  switchingSheet = true;
   closeSheet(true);
+  switchingSheet = false;
+
   openSheetId = id;
   const sheet = $(id);
   const scrim = $('scrim');
@@ -1380,6 +1406,13 @@ function closeSheet(immediate = false) {
   // 這裡不能清 state.editing。openSheet 會先呼叫這裡把上一個面板關掉，
   // 從「標的明細」點某筆進去編輯時，正在編輯的 id 會被清成 null，
   // 存檔就變成新增一筆。各個 open*Sheet 自己都會設好 editing，交給它們。
+
+  // 從明細點進來的，關掉之後回明細，不要整個掉回持股頁
+  if (!switchingSheet && state.returnToDetail) {
+    const back = state.returnToDetail;
+    state.returnToDetail = null;
+    openDetailSheet(back, { restoreScroll: true });
+  }
 }
 
 function showError(id, message) {
@@ -2403,12 +2436,16 @@ function bindEvents() {
 
   $('detail-list').addEventListener('click', (e) => {
     const btn = e.target.closest('.entry');
-    if (btn) editEntry(btn.dataset.entity, btn.dataset.id);
+    if (!btn) return;
+    rememberDetailPosition();
+    editEntry(btn.dataset.entity, btn.dataset.id);
   });
 
   $('btn-detail-edit').addEventListener('click', () => {
     const inst = instrumentById(state.detailId);
-    if (inst) openInstrumentSheet({ record: inst });
+    if (!inst) return;
+    rememberDetailPosition();
+    openInstrumentSheet({ record: inst });
   });
 
   // ---- 顯示哪些資訊 ----

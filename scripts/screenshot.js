@@ -560,12 +560,22 @@ async function run() {
   if (after !== before) problems.push(`從明細編輯變成新增：${before} → ${after} 筆`);
   if (edited !== 1) problems.push(`從明細編輯沒有更新到原本那筆：找到 ${edited} 筆`);
 
+  // 儲存完應該停在明細，不是掉回持股頁 —— 列表幾十筆，每次彈出去等於要重找
+  const backAfterSave = await page.locator('#detail-sheet').isVisible();
+  console.log(`  ${backAfterSave ? '✅' : '❌'} 儲存後回到明細`);
+  if (!backAfterSave) problems.push('從明細編輯後儲存沒有回到明細');
+
+  console.log('\n── 按取消也回得到明細 ──');
+  await page.locator('#detail-list .entry').first().click();
+  await page.waitForTimeout(500);
+  await page.locator('#trade-sheet [data-close]').click();
+  await page.waitForTimeout(600);
+  const backAfterCancel = await page.locator('#detail-sheet').isVisible();
+  console.log(`  ${backAfterCancel ? '✅' : '❌'} 按取消回到明細`);
+  if (!backAfterCancel) problems.push('從明細編輯後按取消沒有回到明細');
+
   /* 刪除鍵吃的也是 state.editing，同一個坑會讓它按下去沒反應 */
   console.log('\n── 從明細刪除 ──');
-  await page.locator('.hold__name--link').first().click();
-  await page.waitForTimeout(400);
-  await page.locator('#detail-filter .chip[data-detail="trade"]').click();
-  await page.waitForTimeout(300);
   await page.locator('#detail-list .entry').first().click();
   await page.waitForTimeout(500);
 
@@ -574,11 +584,21 @@ async function run() {
   if (!deleteVisible) problems.push('編輯面板沒有出現刪除鍵');
 
   await page.locator('#btn-trade-delete').click();
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(700);
 
   const afterDelete = await tradeCount();
   console.log(`  ${afterDelete === before - 1 ? '✅' : '❌'} 真的刪掉了：${before} → ${afterDelete}`);
   if (afterDelete !== before - 1) problems.push(`刪除沒有生效：${before} → ${afterDelete}`);
+
+  const backAfterDelete = await page.locator('#detail-sheet').isVisible();
+  console.log(`  ${backAfterDelete ? '✅' : '❌'} 刪除後也回到明細`);
+  if (!backAfterDelete) problems.push('刪除後沒有回到明細');
+
+  await page.locator('#detail-sheet [data-close]').click();
+  await page.waitForTimeout(500);
+  const stillOpen = await page.locator('#detail-sheet').isVisible();
+  console.log(`  ${!stillOpen ? '✅' : '❌'} 在明細按關閉才真的離開`);
+  if (stillOpen) problems.push('明細按關閉沒有離開');
 
   console.log('\n── 自選顯示欄位 ──');
   const cellsBefore = await page.locator('.hold').first().locator('.hold__cell').count();
