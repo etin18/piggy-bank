@@ -357,8 +357,16 @@ async function run() {
   if (sellCash !== '3,135') problems.push(`美元計價的帳戶實收算錯：${sellCash}`);
   await shot(page, '05b-美元基金賣出');
 
-  await page.locator('#trade-sheet [data-close]').click();
-  await page.waitForTimeout(400);
+  // 匯率要真的存進那筆紀錄裡，不能只是畫面上算一算
+  await page.locator('#trade-form button[type="submit"]').click();
+  await page.waitForTimeout(600);
+  const savedRate = await page.evaluate(() => {
+    const rows = JSON.parse(localStorage.getItem('pb.trades') || '[]')
+      .filter((t) => t.instrumentId === 'i4' && t.action === '賣出' && t._op !== 'delete');
+    return rows.length ? rows[rows.length - 1].rate : null;
+  });
+  console.log(`  ${savedRate === 31.575 ? '✅' : '❌'} 匯率存進紀錄：${savedRate}`);
+  if (savedRate !== 31.575) problems.push(`匯率沒有存進交易紀錄：${savedRate}`);
 
   console.log('\n── 配息表單 ──');
   await page.locator('.action[data-action="dividend"]').click();

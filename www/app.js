@@ -13,6 +13,9 @@
 
 /* ---------- 常數 ---------- */
 
+/** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
+const APP_VERSION = 'v8';
+
 const LS = {
   apiUrl: 'pb.apiUrl',
   secret: 'pb.secret',
@@ -1204,6 +1207,9 @@ function renderSettings() {
   $('stat-lastsync').textContent = state.lastSync
     ? new Date(state.lastSync).toLocaleString('zh-TW', { hour12: false }).replace(/:\d\d$/, '')
     : '—';
+
+  // 版本號放這裡，手機上懷疑「是不是還在用舊版」時可以直接對
+  $('version-text').textContent = `存錢筒 ${APP_VERSION} · 資料存於你的 Google 試算表`;
 
   const list = live('instruments');
   $('instrument-list').innerHTML = list.length
@@ -2601,7 +2607,18 @@ function init() {
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => { /* 沒註冊成功也不影響使用 */ });
+      navigator.serviceWorker.register('sw.js').then((reg) => {
+        // 有新版時講一聲，不然使用者會以為修好的東西還是壞的
+        reg.addEventListener('updatefound', () => {
+          const incoming = reg.installing;
+          if (!incoming) return;
+          incoming.addEventListener('statechange', () => {
+            if (incoming.state === 'installed' && navigator.serviceWorker.controller) {
+              toast('有新版本，重新整理就會更新');
+            }
+          });
+        });
+      }).catch(() => { /* 沒註冊成功也不影響使用 */ });
     });
   }
 }

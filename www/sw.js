@@ -7,7 +7,7 @@
 
 // 改動 www/ 裡的檔案後記得把版號 +1，
 // 否則手機會一直吃舊快取，看不到新版
-const VERSION = 'v7';
+const VERSION = 'v8';
 const CACHE = `piggy-bank-${VERSION}`;
 
 // 本機開發時完全不走快取：改了檔案重整就要看得到，
@@ -70,7 +70,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 靜態資源：先用快取（開啟速度），背景更新
+  // 程式檔（app.js / app.css）走網路優先：
+  // 快取優先的話，改版後第一次重整拿到的還是舊程式，要重整兩次才會更新 ——
+  // 使用者只會覺得「明明修好了怎麼還是壞的」。離線時仍然退回快取。
+  if (/\.(js|css)$/.test(url.pathname)) {
+    event.respondWith(
+      fetch(request)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(request, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // 其餘靜態資源（圖示、manifest）不常變，先用快取，背景更新
   event.respondWith(
     caches.match(request).then((cached) => {
       const network = fetch(request)
