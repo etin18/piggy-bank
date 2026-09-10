@@ -35,7 +35,7 @@ var SECRET = '';   // ← 改成你自己的通關密語，例如 'piggy2026kk'
  * 用來確認這份程式有沒有真的重新部署上去 ——
  * 貼了新程式卻忘了「部署 → 管理部署作業 → 新版本」的話，跑的還是舊的。
  */
-var API_VERSION = 'v15';
+var API_VERSION = 'v16';
 
 /* ==========================================================================
    資料表定義
@@ -262,6 +262,16 @@ function ensureFormats(sheet, config) {
   }
 }
 
+/** 單獨把某一列的純文字欄設好格式。寫值之前一定要先做，否則來不及。 */
+function applyRowFormats(sheet, config, rowIndex) {
+  for (var i = 0; i < config.fields.length; i++) {
+    var field = config.fields[i];
+    if (field.type === 'date' || field.plain) {
+      sheet.getRange(rowIndex, i + 1).setNumberFormat('@');
+    }
+  }
+}
+
 /**
  * 舊版建立的資料表會少掉後來才加的欄位（例如「計價幣別」「匯率」）。
  * 這裡在正確位置補上，既有資料會跟著右移。
@@ -354,11 +364,15 @@ function saveRow(entity, record) {
   var rowValues = config.fields.map(function (f) { return out[f.key]; });
 
   if (rowIndex === -1) {
-    sheet.appendRow(rowValues);
-    rowIndex = sheet.getLastRow();
-  } else {
-    sheet.getRange(rowIndex, 1, 1, config.fields.length).setValues([rowValues]);
+    // 不用 appendRow：它不保證吃到整欄的純文字格式，
+    // 新增的那一列 0056 又會被存成 56（編輯既有列不會，因為那格早就設好了）。
+    // 改成自己算出列號、先設格式、再寫值。
+    rowIndex = sheet.getLastRow() + 1;
+    if (rowIndex > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), 1);
+    applyRowFormats(sheet, config, rowIndex);
   }
+
+  sheet.getRange(rowIndex, 1, 1, config.fields.length).setValues([rowValues]);
 
   return out;
 }

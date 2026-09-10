@@ -800,6 +800,22 @@ async function run() {
 
   /* 假後端刻意不回報 apiVersion，模擬「Code.gs 貼了但忘記重新部署」。
      這正是最難自己發現的狀況 —— 症狀是欄位存不進去、代號的 0 被吃掉 */
+  /* 試算表把 0056 存成 56 的時候，本機還記得完整代號就不該被覆蓋掉 */
+  console.log('\n── 代號前導零被試算表吃掉時的保護 ──');
+  serverState.instruments = serverState.instruments.map(
+    (i) => (i.code === '0056' ? { ...i, code: '56' } : i)
+  );
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(1000);
+
+  const keptCode = await page.evaluate(() => {
+    const rows = JSON.parse(localStorage.getItem('pb.instruments') || '[]');
+    const found = rows.find((i) => i.name === '元大高股息');
+    return found ? found.code : null;
+  });
+  console.log(`  ${keptCode === '0056' ? '✅' : '❌'} 同步回 56 之後本機仍是：${keptCode}`);
+  if (keptCode !== '0056') problems.push(`代號前導零沒有保住：${keptCode}`);
+
   console.log('\n── 後端版本不符要講出來 ──');
   await page.locator('#price-sheet [data-close]').click();   // 上一段留著的面板先收掉
   await page.waitForTimeout(400);

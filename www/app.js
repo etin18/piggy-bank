@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v15';
+const APP_VERSION = 'v16';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -391,10 +391,28 @@ async function sync({ silent = true } = {}) {
 /** 伺服器版本為底，本機還沒送出去的變更蓋在上面 */
 function mergeById(serverRows, localRows) {
   const map = new Map(serverRows.map((r) => [r.id, { ...r, _synced: true }]));
+
   for (const local of localRows) {
-    if (local._op) map.set(local.id, local);
+    if (local._op) {
+      map.set(local.id, local);
+      continue;
+    }
+    // 試算表偶爾會把 0056 存成 56，前導零一旦掉了就救不回來。
+    // 本機還記得完整代號的話就留著，下次寫入會把正確的推回去。
+    const server = map.get(local.id);
+    if (server && keptLeadingZero(local.code, server.code)) server.code = local.code;
   }
+
   return [...map.values()];
+}
+
+function keptLeadingZero(localCode, serverCode) {
+  const mine = String(localCode || '');
+  const theirs = String(serverCode || '');
+  if (!mine || !theirs || mine === theirs) return false;
+  if (mine.length <= theirs.length) return false;
+  if (!/^\d+$/.test(mine) || !/^\d+$/.test(theirs)) return false;
+  return Number(mine) === Number(theirs);
 }
 
 /* ==========================================================================
