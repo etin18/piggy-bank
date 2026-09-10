@@ -1230,6 +1230,14 @@ button, input, select, textarea {
   padding: 16px 16px calc(24px + var(--safe-b));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  /* 捲到頂再往下拉時不要連帶把整頁一起橡皮筋 —— 那個位移要留給下拉關閉 */
+  overscroll-behavior: contain;
+}
+
+/* 握把大一點好抓，往下一撥就能把面板收起來 */
+.sheet__grip {
+  cursor: grab;
+  touch-action: none;
 }
 
 /* ==========================================================================

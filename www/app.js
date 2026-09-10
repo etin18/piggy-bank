@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v10';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -1415,6 +1415,95 @@ function closeSheet(immediate = false) {
   }
 }
 
+/* ---------- 往下拉關掉 ----------
+
+   頂端那條橫槓，手機上直覺就是往下一撥把它收起來。
+
+   只在「內容已經捲到最上面」或「從握把、標題列起手」時才接管手勢，
+   不然使用者想往下看表單後半段，反而會把面板拉掉。
+*/
+
+const SHEET_CLOSE_PX = 110;   // 拉超過這個距離放手就關
+const SHEET_FLING = 0.55;     // 或者甩得夠快（px/ms），距離不夠也關
+
+function resetSheetDrag(sheet) {
+  sheet.style.transition = '';
+  sheet.style.transform = '';
+  $('scrim').style.opacity = '';
+}
+
+function bindSheetDrag(sheet) {
+  const body = sheet.querySelector('.sheet__body');
+
+  let startY = 0;
+  let dy = 0;
+  let vy = 0;            // 最後一段的速度
+  let lastY = 0;
+  let lastT = 0;
+  let dragging = false;
+  let settled = false;   // 這次觸控算拖面板還是捲內容，判定過就不再改
+
+  const inside = (t, sel) => t instanceof Element && !!t.closest(sel);
+
+  sheet.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    startY = e.touches[0].clientY;
+    lastY = startY;
+    lastT = e.timeStamp;
+    dy = 0;
+    vy = 0;
+    dragging = false;
+    // 從輸入框起手不接管，不然選字會被吃掉
+    settled = inside(e.target, 'input, textarea, select');
+  }, { passive: true });
+
+  sheet.addEventListener('touchmove', (e) => {
+    if (settled && !dragging) return;
+    const y = e.touches[0].clientY;
+    const delta = y - startY;
+
+    if (!dragging) {
+      if (Math.abs(delta) < 6) return;   // 還看不出要往哪
+      settled = true;
+      const atTop = !body || body.scrollTop <= 0;
+      const canDrag = delta > 0 && (inside(e.target, '.sheet__grip, .sheet__head') || atTop);
+      if (!canDrag) return;              // 是要捲內容，讓瀏覽器自己處理
+      dragging = true;
+      sheet.style.transition = 'none';
+    }
+
+    // 只看最後一段的速度。用整段平均的話，「先慢慢拉一點、再往下一甩」
+    // 會被前面的慢動作稀釋，甩了也關不掉
+    const dt = e.timeStamp - lastT;
+    if (dt >= 8) {                       // 取樣太密就先攢著，不然雜訊蓋過訊號
+      vy = (y - lastY) / dt;
+      lastY = y;
+      lastT = e.timeStamp;
+    }
+
+    dy = Math.max(0, delta);
+    e.preventDefault();                  // 攔下捲動，位置改由我們跟手
+    sheet.style.transform = `translateY(${dy}px)`;
+    $('scrim').style.opacity = String(Math.max(0, 1 - dy / (sheet.offsetHeight || 1)));
+  }, { passive: false });
+
+  const release = (e) => {
+    if (!dragging) return;
+    dragging = false;
+
+    // 拉到一半停住再放手就不算甩，那時只看拉了多遠
+    const flung = e.timeStamp - lastT < 120 && vy > SHEET_FLING;
+    const shouldClose = dy > SHEET_CLOSE_PX || flung;
+
+    // 先把 inline 樣式清掉，關閉動畫才接得上目前的位置繼續往下滑
+    resetSheetDrag(sheet);
+    if (shouldClose) closeSheet();
+  };
+
+  sheet.addEventListener('touchend', release);
+  sheet.addEventListener('touchcancel', release);
+}
+
 function showError(id, message) {
   const el = $(id);
   el.textContent = message;
@@ -2469,6 +2558,8 @@ function bindEvents() {
   });
 
   // ---- 底部面板共用 ----
+  for (const sheet of document.querySelectorAll('.sheet')) bindSheetDrag(sheet);
+
   $('scrim').addEventListener('click', () => closeSheet());
   for (const btn of document.querySelectorAll('[data-close]')) {
     btn.addEventListener('click', () => closeSheet());

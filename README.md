@@ -201,6 +201,9 @@ node scripts/test-quotes.js [代號…]
 
 # 版面實測 + 數字驗算（需要本機 server 開著）
 PW_CORE=<playwright-core 路徑> node scripts/screenshot.js
+
+# 底部面板下拉關閉手勢（用 CDP 送真觸控事件）
+PW_CORE=<playwright-core 路徑> node scripts/test-sheet-drag.js
 ```
 
 `screenshot.js` 會灌入一份手算過的假資料（含期初概估、定期定額、季配與月配），
