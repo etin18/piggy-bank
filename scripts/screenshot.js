@@ -615,6 +615,42 @@ async function run() {
   console.log(`  ${!stillOpen ? '✅' : '❌'} 在明細按關閉才真的離開`);
   if (stillOpen) problems.push('明細按關閉沒有離開');
 
+  /* 手續費開關：勾起來之後投入成本要少掉手續費總額，損益跟著多同樣的數字。
+     不寫死金額 —— 前面的測試刪過交易，總額會變。改成跟開關旁邊標示的數字對。 */
+  console.log('\n── 投入成本含不含手續費 ──');
+  const money = (t) => Number(String(t).replace(/[^0-9.]/g, '')) * (String(t).includes('−') ? -1 : 1);
+
+  const costBefore = (await textOf(page, 'hd-cost')).trim();
+  const plBefore = (await textOf(page, 'hd-pl')).trim();
+  const feeHint = (await textOf(page, 'fee-hint')).trim();
+  const feeAmount = money(feeHint);
+  console.log(`  開關旁邊寫著：${feeHint}`);
+
+  await page.locator('label:has(#exclude-fee)').click();
+  await page.waitForTimeout(400);
+  const costAfter = (await textOf(page, 'hd-cost')).trim();
+  const plAfter = (await textOf(page, 'hd-pl')).trim();
+
+  const costDelta = money(costBefore) - money(costAfter);
+  const plDelta = money(plAfter) - money(plBefore);
+  console.log(`  投入成本 ${costBefore} → ${costAfter}（少了 ${costDelta}）`);
+  console.log(`  含息報酬 ${plBefore} → ${plAfter}（多了 ${plDelta}）`);
+
+  const costOk = feeAmount > 0 && costDelta === feeAmount;
+  const plOk = feeAmount > 0 && plDelta === feeAmount;
+  console.log(`  ${costOk ? '✅' : '❌'} 投入成本剛好少掉手續費 ${feeAmount}`);
+  console.log(`  ${plOk ? '✅' : '❌'} 損益跟著多 ${feeAmount}`);
+  if (!costOk) problems.push(`手續費開關對投入成本沒生效：少了 ${costDelta}，應為 ${feeAmount}`);
+  if (!plOk) problems.push(`手續費開關對損益沒生效：多了 ${plDelta}，應為 ${feeAmount}`);
+  await shot(page, '09e-不含手續費');
+
+  const feeSaved = await page.evaluate(() => localStorage.getItem('pb.excludeFee'));
+  console.log(`  ${feeSaved === '1' ? '✅' : '❌'} 設定有存起來：${feeSaved}`);
+  if (feeSaved !== '1') problems.push('手續費開關沒有存到 localStorage');
+
+  await page.locator('label:has(#exclude-fee)').click();   // 切回來，不影響後面的驗算
+  await page.waitForTimeout(400);
+
   console.log('\n── 自選顯示欄位 ──');
   await expandAll();
   const factsOf = () => page.locator('.hold__facts').first().innerText();

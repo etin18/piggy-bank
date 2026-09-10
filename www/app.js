@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v14';
+const APP_VERSION = 'v15';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -22,6 +22,7 @@ const LS = {
   lastSync: 'pb.lastSync',
   theme: 'pb.theme',
   fields: 'pb.fields',    // 持股頁要顯示哪些資訊，只存在這台裝置
+  excludeFee: 'pb.excludeFee',
   apiVersion: 'pb.apiVersion',
   data: 'pb.',            // pb.instruments、pb.trades …
 };
@@ -80,6 +81,7 @@ const state = {
   showClosed: false,     // 持股頁的「已出清」是否展開
   showAllRecent: false,  // 首頁的最近紀錄是否展開全部
   fields: DEFAULT_FIELDS.slice(),   // 持股卡片顯示哪些資訊
+  excludeFee: false,     // 投入成本要不要把手續費算進去
   detailId: null,        // 正在看明細的標的
   detailFilter: 'all',
   returnToDetail: null,  // 關掉編輯面板後要回到哪一檔的明細
@@ -220,6 +222,7 @@ function loadLocal() {
     state.lastSync = localStorage.getItem(LS.lastSync) || null;
     state.theme = localStorage.getItem(LS.theme) || 'light';
     state.apiVersion = localStorage.getItem(LS.apiVersion) || '';
+    state.excludeFee = localStorage.getItem(LS.excludeFee) === '1';
 
     const saved = JSON.parse(localStorage.getItem(LS.fields) || 'null');
     if (Array.isArray(saved)) {
@@ -623,7 +626,12 @@ function buildPositions() {
     const priced = price > 0 && rate > 0;
 
     const qty = current ? current.qty : 0;
-    const cost = current ? current.cost : 0;
+    const costWithFee = current ? current.cost : 0;
+    const costExFee = current ? current.costExFee : 0;
+
+    // 成本要不要含手續費由開關決定。之後所有用到 cost 的地方都吃這個基準，
+    // 不含費時看到的「價格漲跌」才是純粹的價格變動
+    const cost = state.excludeFee ? costExFee : costWithFee;
     const value = priced ? qty * price * rate : 0;
 
     positions.push({
@@ -633,6 +641,9 @@ function buildPositions() {
       closed,
       qty,
       cost,
+      costWithFee,
+      costExFee,
+      fee: costWithFee - costExFee,
       price,
       rate,
       value,
@@ -994,6 +1005,13 @@ function renderHoldings() {
   $('hd-cost').textContent = fmtMoney(cost);
   $('hd-div').textContent = fmtMoney(dividends);
   setPL($('hd-pl'), value - cost + dividends);
+
+  // 手續費總額寫在開關旁邊，才知道這個勾影響多少錢
+  const fee = held.reduce((s, p) => s + p.fee, 0);
+  $('exclude-fee').checked = state.excludeFee;
+  $('fee-hint').textContent = fee > 0
+    ? `${state.excludeFee ? '已扣掉' : '含'} ${fmtMoney(fee)}`
+    : '';
 
   const closed = closedRounds();
   $('holdings-empty').hidden = held.length > 0 || closed.length > 0;
@@ -2577,6 +2595,12 @@ function bindEvents() {
   $('btn-closed-toggle').addEventListener('click', () => {
     state.showClosed = !state.showClosed;
     renderHoldings();
+  });
+
+  $('exclude-fee').addEventListener('change', (e) => {
+    state.excludeFee = e.target.checked;
+    try { localStorage.setItem(LS.excludeFee, state.excludeFee ? '1' : '0'); } catch (err) { /* 無妨 */ }
+    render();   // 報表頁的累計投入成本也吃同一個基準
   });
 
   // 點卡片展開／收合；展開後的「所有紀錄」才進明細面板
