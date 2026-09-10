@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v13';
+const APP_VERSION = 'v14';
 
 const LS = {
   apiUrl: 'pb.apiUrl',
@@ -837,7 +837,7 @@ function entryHtml(entry) {
       fmtDate(r.date),
       fmtQty(type, r.quantity),
       r.price ? `@ ${fmtNum(r.price, 4)}` : '',
-      r.style || '',
+      r.style ? styleLabel(r.style) : '',
     ].filter(Boolean).join(' · ');
 
     // 期初那筆沒有實際扣款，顯示金額只會讓人以為當天真的付了錢
@@ -1616,7 +1616,7 @@ function openTradeSheet({ category, action, record = null }) {
     category,
     action,
     unit: category === ETF ? '股' : '',
-    style: category === FUND ? '小額' : '',
+    style: category === FUND ? '小額' : '單筆',
   };
   state.editing = record ? { entity: 'trades', id: record.id } : null;
 
@@ -1639,13 +1639,17 @@ function openTradeSheet({ category, action, record = null }) {
   layoutTradeFields(isETF, usd, isBuy);
 
   $('t-unit-chips').hidden = !isETF;
-  $('t-style-field').hidden = isETF;
+
+  // ETF 也有定期定額（券商的定額投資），只是用詞跟基金平台不一樣
+  $('t-style-field').hidden = false;
+  $('t-style-regular').textContent = isETF ? '定期定額' : '小額（定期定額）';
+  $('t-style-lump').textContent = isETF ? '自己下單' : '單筆';
 
   if (record) {
     // 編輯既有紀錄：數量若剛好是整張就用「張」顯示，比較好核對
     const useLot = isETF && record.quantity >= 1000 && record.quantity % 1000 === 0;
     state.draft.unit = useLot ? '張' : '股';
-    state.draft.style = record.style || (category === FUND ? '小額' : '');
+    state.draft.style = record.style || (category === FUND ? '小額' : '單筆');
 
     $('t-qty').value = useLot ? fmtNum(record.quantity / 1000, 3) : fmtNum(record.quantity, 4);
     $('t-price').value = record.price ? fmtNum(record.price, 6) : '';
@@ -1891,7 +1895,7 @@ function submitTrade() {
     code: inst ? (inst.code || inst.name) : '',
     date,
     action: isBuy ? BUY : SELL,
-    style: state.draft.category === FUND ? chipValue('t-style-chips', 'style') : '',
+    style: chipValue('t-style-chips', 'style') || (state.draft.category === FUND ? '小額' : '單筆'),
     quantity,
     price,
     rate,
