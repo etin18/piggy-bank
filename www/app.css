@@ -705,14 +705,14 @@ button, input, select, textarea {
   min-width: 0;
 }
 
+/* 不用卡片，用分隔線分列。一頁塞得下的檔數多一截，也不會每一檔都在搶注意力 */
 .holdings {
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 
 .hold-group__title {
-  margin: 8px 0 2px;
+  margin: 18px 0 2px;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: .06em;
@@ -720,14 +720,23 @@ button, input, select, textarea {
 }
 
 .hold {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-1);
-  box-shadow: var(--shadow);
-  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
 }
-.hold--etf  { border-left: 3px solid var(--etf); }
-.hold--fund { border-left: 3px solid var(--fund); }
+
+/* ETF 還是基金，用名字前面那顆小圓點分辨就夠了 */
+.hold__name::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: 1px;
+}
+.hold--etf  .hold__name::before { background: var(--etf); }
+.hold--fund .hold__name::before { background: var(--fund); }
 
 /* 收合時看到的那一列：名字 ＋ 賺賠多少，一個畫面掃得完 */
 .hold__row {
@@ -735,7 +744,7 @@ button, input, select, textarea {
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 13px 14px;
+  padding: 13px 2px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -795,9 +804,7 @@ button, input, select, textarea {
 .hold__pct.is-flat { color: var(--muted); }
 
 .hold__detail {
-  padding: 2px 14px 13px;
-  border-top: 1px solid var(--border);
-  margin-top: -1px;
+  padding: 0 2px 14px;
 }
 
 /* 投入 → 現值，用流向表達「錢從哪變到哪」 */
@@ -1086,17 +1093,16 @@ button, input, select, textarea {
 .closed__list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 
+/* 跟上面的持股列表同一套：分隔線，不用卡片 */
 .closed__item {
-  padding: 11px 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-1);
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--border);
   opacity: .92;
 }
+.closed__item:last-child { border-bottom: 0; }
 
 .closed__head {
   display: flex;
