@@ -77,9 +77,9 @@ const SEED = {
       quantity: 111.6071, price: 44.80, amount: 5000, fee: 25, cash: 5025, note: '' },
 
     // ETF：0056 買兩次沒賣過
-    { id: 't6', instrumentId: 'i1', code: '0056', date: '2025-12-10', action: '買進', style: '',
+    { id: 't6', instrumentId: 'i1', code: '0056', date: '2025-12-10', action: '買進', style: '單筆',
       quantity: 2000, price: 36.5, amount: 73000, fee: 104, cash: 73104, note: '' },
-    { id: 't7', instrumentId: 'i1', code: '0056', date: '2026-06-12', action: '買進', style: '',
+    { id: 't7', instrumentId: 'i1', code: '0056', date: '2026-06-12', action: '買進', style: '小額',
       quantity: 1000, price: 37.2, amount: 37200, fee: 53, cash: 37253, note: '' },
 
     // ETF：00919 買 → 全賣 → 跌下來又買回，這是兩個獨立的持有回合
@@ -531,6 +531,13 @@ async function run() {
   const detailStats = (await page.locator('#detail-stats').innerText()).replace(/\s+/g, ' ');
   console.log(`  標題：${detailTitle}`);
   console.log(`  摘要：${detailStats}`);
+
+  // 0056 有兩筆買進：一筆自己下單、一筆定期定額
+  const buyCount = detailStats.includes('買進 2 次')
+    && detailStats.includes('定期定額 1 次')
+    && detailStats.includes('自己下單 1 次');
+  console.log(`  ${buyCount ? '✅' : '❌'} 摘要列出買進次數`);
+  if (!buyCount) problems.push(`標的明細沒有列出買進次數：${detailStats}`);
   console.log(`  ${detailCount > 0 ? '✅' : '❌'} 列出 ${detailCount} 筆紀錄`);
   if (!detailCount) problems.push('標的明細沒有列出任何紀錄');
 

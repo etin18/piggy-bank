@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v19';
+const APP_VERSION = 'v20';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -717,8 +717,10 @@ function closedRounds() {
 }
 
 /**
- * 帳戶餘額 ＝ 期初 ＋ 存入 − 提領 ＋ 賣出實收 ＋ 配息實領 − 買進實扣
+ * 帳戶餘額 ＝ 期初 ＋ 存入 ＋ 交割折讓 − 提領 ＋ 賣出實收 ＋ 配息實領 − 買進實扣
  * 兩個帳戶各算各的：ETF 走券商，基金走基金平台。
+ *
+ * 只有「提領」是減項，其餘（存入、券商事後退回的交割折讓）都是錢進來。
  *
  * 「2025 之前」的期初持股不扣款 —— 那筆錢在期初餘額被填進來之前
  * 早就付掉了，再扣一次會變成負的。
@@ -899,7 +901,7 @@ function entryHtml(entry) {
       fmtDate(r.date),
       fmtQty(type, r.quantity),
       r.price ? `@ ${fmtNum(r.price, 4)}` : '',
-      r.style ? styleLabel(r.style) : '',
+      r.style ? styleLabel(r.style, type) : '',
     ].filter(Boolean).join(' · ');
 
     // 期初那筆沒有實際扣款，顯示金額只會讓人以為當天真的付了錢
@@ -941,7 +943,7 @@ function entryHtml(entry) {
     <button class="entry" type="button" data-entity="cashflows" data-id="${escapeHtml(r.id)}">
       <span class="entry__tag entry__tag--cash">⇅</span>
       <span class="entry__body">
-        <span class="entry__name">${isIn ? '存入' : '提領'}</span>
+        <span class="entry__name">${escapeHtml(r.action || (isIn ? '存入' : '提領'))}</span>
         <span class="entry__meta">${escapeHtml(meta)}</span>
       </span>
       <span class="entry__amount ${isIn ? 'entry__amount--in' : 'entry__amount--out'}">
@@ -1163,7 +1165,7 @@ function holdingHtml(card) {
   const updated = row && row.updatedAt ? fmtDate(String(row.updatedAt).slice(0, 10)) : '';
 
   const split = lots.length > 1;   // 同一檔基金既有單筆也有定期定額
-  const singleStyle = !split && card.type === FUND ? styleLabel(lots[0].style) : '';
+  const singleStyle = !split && card.type === FUND ? styleLabel(lots[0].style, card.type) : '';
   const open = state.expanded.has(inst.id);
 
   const unrealized = value - cost;
@@ -1287,8 +1289,9 @@ function fmtPct(amount, base) {
   return `${pct >= 0 ? '+' : '−'}${Math.abs(pct).toFixed(1)}%`;
 }
 
-function styleLabel(style) {
-  return style === '單筆' ? '單筆' : '定期定額';
+function styleLabel(style, type) {
+  if (style === '單筆') return type === ETF ? '自己下單' : '單筆';
+  return '定期定額';
 }
 
 function lotHtml(position, hasPrice) {
@@ -1305,7 +1308,7 @@ function lotHtml(position, hasPrice) {
 
   return `
     <div class="lot">
-      <span class="lot__name">${styleLabel(position.style)}</span>
+      <span class="lot__name">${styleLabel(position.style, position.type)}</span>
       <span class="lot__qty">${fmtQty(position.type, position.qty)}</span>
       <span class="lot__avg"></span>
       ${plHtml(unrealized, 0, { cls: 'lot__pl' })}
@@ -1329,7 +1332,7 @@ function renderClosed(rounds) {
 
   $('closed-list').innerHTML = rounds.map(({ position, round }) => {
     const inst = position.instrument;
-    const tag = position.type === FUND ? `<span class="hold__tag">${styleLabel(position.style)}</span>` : '';
+    const tag = position.type === FUND ? `<span class="hold__tag">${styleLabel(position.style, position.type)}</span>` : '';
     const period = `${fmtDate(round.startDate)} – ${fmtDate(round.endDate)}`;
     const meta = [
       period,
@@ -1483,6 +1486,22 @@ function renderDetail() {
     stats.push(row('累計配息', fmtMoney(dividends)));
   }
   if (Math.round(realized) !== 0) stats.push(plRow('已實現損益', realized, 0));
+
+  // 買了幾次、其中定期定額幾次。舊資料可能沒存型態，那類另外列，
+  // 不要硬歸到某一邊 —— 歸錯了數字看起來還是合理的，最難發現
+  const buys = live('trades').filter((t) => t.instrumentId === inst.id && t.action === BUY);
+  if (buys.length) {
+    const regular = buys.filter((t) => t.style === '小額').length;
+    const lump = buys.filter((t) => t.style === '單筆').length;
+    const untagged = buys.length - regular - lump;
+
+    const parts = [];
+    if (regular) parts.push(`定期定額 ${regular} 次`);
+    if (lump) parts.push(`${inst.type === ETF ? '自己下單' : '單筆'} ${lump} 次`);
+    if (untagged) parts.push(`未標型態 ${untagged} 次`);
+
+    stats.push(row(`買進 ${buys.length} 次`, parts.join(' · '), true));
+  }
 
   $('detail-stats').innerHTML = stats.join('');
 
@@ -2154,6 +2173,7 @@ function openCashSheet({ category, record = null }) {
   const account = record ? record.account : ACCOUNT_OF[category] || '券商';
   setChips('c-account-chips', 'account', account);
   setChips('c-action-chips', 'cashaction', record ? record.action : '存入');
+  updateCashActionHint();
 
   if (record) {
     $('c-date').value = record.date === PRE ? '' : record.date;
@@ -2169,6 +2189,13 @@ function openCashSheet({ category, record = null }) {
 
   syncInitialToggle('c-initial', 'c-date');
   openSheet('cash-sheet');
+}
+
+function updateCashActionHint() {
+  const action = chipValue('c-action-chips', 'cashaction');
+  $('c-action-hint').textContent = action === '交割折讓'
+    ? '券商事後退回的手續費折扣，跟存入一樣是錢進帳戶'
+    : '';
 }
 
 function submitCash() {
@@ -2190,7 +2217,7 @@ function submitCash() {
 
   upsert('cashflows', record);
   closeSheet();
-  toast(record.action === '存入' ? '記下存入' : '記下提領');
+  toast(`記下${record.action}`);
 }
 
 /* ==========================================================================
@@ -2770,6 +2797,7 @@ function bindEvents() {
         state.draft.style = chip.dataset.style;
         renderAmountQuick();   // 單筆和定期定額的常用金額不一樣
       }
+      if (group.id === 'c-action-chips') updateCashActionHint();
       if (group.id === 'i-type-chips') syncCurrencyField();
       if (group.id === 'd-style-chips') {
         // 換了型態，持有單位要照那一邊重新帶入

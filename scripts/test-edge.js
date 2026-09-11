@@ -159,6 +159,31 @@ function check(name, ok, detail = '') {
   console.log(`   清單 ${listEmpty ? '空的' : '有東西'}，空狀態${emptyShown ? '有' : '沒'}顯示`);
   check('空清單要講一句話，不能只留一片空白', !listEmpty || emptyShown);
 
+  /* ---------- 4b. 交割折讓 ---------- */
+  console.log('\n4b. 交割折讓要跟存入一樣加進餘額');
+  await seed({
+    instruments: [{ id: 'f', code: '0050', name: '台灣50', type: 'ETF', currency: 'TWD', status: '持有中' }],
+    trades: [
+      { id: 't1', instrumentId: 'f', date: '2026-01-05', action: '買進', quantity: 1000, price: 30, rate: 1, amount: 30000, fee: 43, cash: 30043 },
+    ],
+    cashflows: [
+      { id: 'c1', date: '2026-01-02', account: '券商', action: '存入', amount: 50000 },
+      { id: 'c2', date: '2026-01-20', account: '券商', action: '交割折讓', amount: 17 },
+    ],
+    prices: [{ id: 'f', code: '0050', price: 31, rate: 1 }],
+  });
+  await page.locator('.tab[data-page="report"]').click();
+  await page.waitForTimeout(300);
+  const bal = (await page.locator('#bal-etf').innerText()).trim();
+  console.log(`   券商餘額：${bal}`);
+  // 50,000 − 30,043 + 17 = 19,974
+  check('交割折讓是加項', bal === '$19,974', `算出 ${bal}`);
+
+  await page.locator('.tab[data-page="record"]').click();
+  await page.waitForTimeout(250);
+  const entryText = (await page.locator('#recent-list').innerText()).replace(/\s+/g, '');
+  check('紀錄列表寫得出「交割折讓」', entryText.includes('交割折讓'), entryText.slice(0, 60));
+
   /* ---------- 5. 極端數字 ---------- */
   console.log('\n5. 極大與極小的數字');
   await seed({
