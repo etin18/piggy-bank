@@ -171,7 +171,34 @@ const SEED = {
    總成本 110,357 +22,933 +50,100 +30,000    ＝ 213,390
    持有部位的配息 6,404 + 616 + 278 + 380 ＝ 7,678
                 （00919 那 713 歸在已出清的第一段，不算在現在的部位裡）
-   含息報酬 ＝ 239,369 − 213,390 + 7,678 ＝ +33,657 */
+   含息報酬 ＝ 239,369 − 213,390 + 7,678 ＝ +33,657
+
+   分開看 —— 上面那些合計拆成 ETF 與基金兩欄，加起來要一樣
+     ETF   配息 7,117 ÷ 9 ＝ 791     成本 110,357 ＋ 22,933 ＝ 133,290
+           市值 114,600 ＋ 24,500 ＝ 139,100     未實現 +5,810
+           配息率 7,117 ÷ 133,290 ＝ 5.3%
+     基金  配息 1,274 ÷ 9 ＝ 142     成本 50,100 ＋ 30,000 ＝ 80,100
+           市值 58,801.6 ＋ 41,467.7 ＝ 100,269  未實現 +20,169
+           配息率 1,274 ÷ 80,100 ＝ 1.6%
+
+   明細頁（預設是「今年」＝ 2026/01～09，三種都勾、型態不篩）
+     買進  t4 5,025 ＋ t5 5,025 ＋ t7 37,253 ＋ t8 23,834 ＋ t10 22,933 ＝ 94,070（5 筆）
+           其中 ETF 84,020、基金 10,050
+     賣出  t9 26,435（ETF）
+     配息  8,391（ETF 7,117、基金 1,274，共 11 筆）
+     淨額  8,391 ＋ 26,435 − 94,070 ＝ −59,244
+           ETF −50,468、基金 −8,776
+
+   只勾「買進 ＋ 定期定額」：t4 ＋ t5 ＋ t7 ＝ 47,303（3 筆）
+     00919 那兩筆買進沒記型態（style 是空的），會被排掉 → 畫面要講「另有 2 筆」
+
+   切「全部」：買進 9 筆共 207,224 —— 期初那筆（PRE2025）沒有月份，
+     不屬於任何期間，所以是 9 筆不是 10 筆
+
+   配息率的分母是「該年度結束時」的投入成本，不是現在的。
+   今年還沒過完就結算到今天，所以 2026 的分母剛好等於現在；
+   換成 2025 會退回那個時點 —— 2026 年那幾筆買進都還沒發生：
+     期初 30,000 ＋ 定期定額 5,025 × 2 ＋ 0056 73,104 ＋ 天達 30,000 ＝ 143,154 */
 const EXPECT = {
   'summary-total': '$8,391',
   'summary-avg': '$932',
@@ -184,6 +211,25 @@ const EXPECT = {
   'hd-cost': '$213,390',
   'hd-pl': '+$33,657',
   'rp-real': '+$2,601',
+
+  'split-etf-avg': '$791',
+  'split-fund-avg': '$142',
+  'split-etf-rate': '5.3%',
+  'split-fund-rate': '1.6%',
+  'split-etf-cost': '$133,290',
+  'split-fund-cost': '$80,100',
+  'split-etf-unreal': '+$5,810',
+  'split-fund-unreal': '+$20,169',
+  'cost-at-2025': 143154,
+
+  'ledger-buy': '−$94,070',
+  'ledger-sell': '+$26,435',
+  'ledger-div': '+$8,391',
+  'ledger-net': '−$59,244',
+  'ledger-etf-net': '−$50,468',
+  'ledger-fund-net': '−$8,776',
+  'ledger-regular': '−$47,303',
+  'ledger-all-buy': '−$207,224',
 };
 
 /* ========================================================================== */
@@ -204,6 +250,17 @@ async function check(page, id, expected, label) {
   const ok = actual.replace(/\s+/g, ' ').includes(expected);
   console.log(`  ${ok ? '✅' : '❌'} ${label}：${actual}${ok ? '' : `（應為 ${expected}）`}`);
   if (!ok) problems.push(`${label} 得到「${actual}」，應為「${expected}」`);
+}
+
+/**
+ * 在一整塊容器的文字裡找某個值。
+ * 分開看那兩欄是動態產生的，每個數字沒有自己的 id，所以只能整塊撈出來比對。
+ */
+async function checkIn(page, id, expected, label) {
+  const actual = (await textOf(page, id)).replace(/\s+/g, ' ');
+  const ok = actual.includes(expected);
+  console.log(`  ${ok ? '✅' : '❌'} ${label}：${expected}`);
+  if (!ok) problems.push(`${label} 在 #${id} 裡找不到「${expected}」，實際內容：${actual}`);
 }
 
 async function run() {
@@ -417,6 +474,51 @@ async function run() {
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(300);
 
+  /* 漏記偵測：所有數字都建立在「記錄是完整的」，漏一筆不會有任何矛盾，
+     只會安靜地少一塊。SEED 裡安聯是月配卻只記了 3、6、8 月，正好拿來驗 */
+  console.log('\n── 漏記提醒 ──');
+  await page.locator('.tab[data-page="record"]').click();
+  await page.waitForTimeout(300);
+  await shot(page, '01c-漏記提醒');
+
+  const missing = await page.evaluate(() => findMissingDividends().map((m) => ({
+    name: m.position.instrument.name, style: m.position.style, count: m.count, kind: m.kind,
+  })));
+  for (const m of missing) {
+    console.log(`     ${m.name}${m.style ? '/' + m.style : ''}　${m.kind} ${m.count} 期`);
+  }
+
+  const okCount = missing.length === 3;
+  console.log(`  ${okCount ? '✅' : '❌'} 抓到 ${missing.length} 個部位有缺${okCount ? '' : '，應為 3'}`);
+  if (!okCount) problems.push(`漏記偵測抓到 ${missing.length} 個部位，應為 3`);
+
+  // 安聯月配，記了 3、6、8 月 → 4、5、7 月要被抓出來，而且單筆與定期定額各算各的
+  const lump = missing.find((m) => m.name === '安聯收益成長' && m.style === '單筆');
+  const okLump = lump && lump.count === 3;
+  console.log(`  ${okLump ? '✅' : '❌'} 安聯・單筆 抓到 ${lump ? lump.count : 0} 期（應為 3）`);
+  if (!okLump) problems.push(`安聯單筆應抓到 3 期，實際 ${lump ? lump.count : 0}`);
+
+  // 0056 季配、每期都記了、下一期還沒到 → 不該開口
+  const quiet = !missing.some((m) => m.name === '元大高股息');
+  console.log(`  ${quiet ? '✅' : '❌'} 記錄完整的 0056 沒有被誤報`);
+  if (!quiet) problems.push('0056 記錄完整卻被報漏記');
+
+  // 天達季配，最後一期 6/18，下一期 9/18 還沒到 → 也不該開口
+  const quietUsd = !missing.some((m) => m.name === '天達環球動力');
+  console.log(`  ${quietUsd ? '✅' : '❌'} 還在寬限期內的天達沒有被誤報`);
+  if (!quietUsd) problems.push('天達還在寬限期內卻被報漏記');
+
+  // 點一下要直接開配息表單，標的與除息日都填好
+  await page.locator('#missing-list .alert__item').first().click();
+  await page.waitForTimeout(450);
+  const sheetOpen = await page.locator('#dividend-sheet').isVisible();
+  const preExDate = await page.inputValue('#d-exdate');
+  const preUnits = await page.inputValue('#d-units');
+  console.log(`  ${sheetOpen && preExDate ? '✅' : '❌'} 點進去開了表單，除息日 ${preExDate || '（空）'}、持有單位 ${preUnits || '（空）'}`);
+  if (!sheetOpen || !preExDate) problems.push('漏記提醒點進去沒有預填除息日');
+  await page.locator('#dividend-sheet [data-close]').click();
+  await page.waitForTimeout(400);
+
   console.log('\n── 報表頁 ──');
   await page.locator('.tab[data-page="report"]').click();
   await page.waitForTimeout(300);
@@ -426,6 +528,43 @@ async function run() {
   await check(page, 'rp-fund', EXPECT['rp-fund'], '基金配息');
   await check(page, 'bal-etf', EXPECT['bal-etf'], '券商餘額');
   await check(page, 'bal-fund', EXPECT['bal-fund'], '基金帳戶餘額');
+
+  console.log('\n── 報表・分開看 ──');
+  await page.locator('#report-mode .seg__btn[data-mode="split"]').click();
+  await page.waitForTimeout(250);
+  await shot(page, '08b-報表-分開看');
+
+  await checkIn(page, 'rp-div-cmp', EXPECT['split-etf-avg'], 'ETF 平均每月');
+  await checkIn(page, 'rp-div-cmp', EXPECT['split-fund-avg'], '基金平均每月');
+  await checkIn(page, 'rp-div-cmp', '÷ 9 個月', '分母有印在畫面上');
+  await checkIn(page, 'rp-div-cmp', EXPECT['split-etf-rate'], 'ETF 配息率');
+  await checkIn(page, 'rp-div-cmp', EXPECT['split-fund-rate'], '基金配息率');
+
+  await checkIn(page, 'rp-pl-cmp', EXPECT['split-etf-cost'], 'ETF 投入成本');
+  await checkIn(page, 'rp-pl-cmp', EXPECT['split-fund-cost'], '基金投入成本');
+  await checkIn(page, 'rp-pl-cmp', EXPECT['split-etf-unreal'], 'ETF 未實現');
+  await checkIn(page, 'rp-pl-cmp', EXPECT['split-fund-unreal'], '基金未實現');
+
+  // 配息率的分母要退回「那一年結束時」的部位，不能拿現在的持股去除去年的配息。
+  // 直接問計算層：2025 年底時 2026 那幾筆買進都還沒發生
+  const cost2025 = await page.evaluate(() => Math.round(
+    buildPositions('2025-12-31')
+      .filter((p) => p.qty > 1e-6)
+      .reduce((sum, p) => sum + p.cost, 0)
+  ));
+  const okCost = cost2025 === EXPECT['cost-at-2025'];
+  console.log(`  ${okCost ? '✅' : '❌'} 2025 年底的投入成本：${cost2025.toLocaleString('en-US')}`
+    + `${okCost ? '' : `（應為 ${EXPECT['cost-at-2025'].toLocaleString('en-US')}）`}`);
+  if (!okCost) problems.push(`2025 年底成本得到 ${cost2025}，應為 ${EXPECT['cost-at-2025']}`);
+
+  // 雙柱圖：12 個月各兩根
+  const bars = await page.locator('#chart-split .gcol__bar').count();
+  const okBars = bars === 24;
+  console.log(`  ${okBars ? '✅' : '❌'} 雙柱圖 ${bars} 根${okBars ? '（12 個月 × 2）' : '，應為 24'}`);
+  if (!okBars) problems.push(`雙柱圖有 ${bars} 根，應為 24`);
+
+  await page.locator('#report-mode .seg__btn[data-mode="total"]').click();
+  await page.waitForTimeout(200);
 
   console.log('\n── 持股頁 ──');
   await page.locator('.tab[data-page="holdings"]').click();
@@ -696,6 +835,120 @@ async function run() {
   await page.waitForTimeout(300);
   await shot(page, '11-設定');
 
+  console.log('\n── 明細頁 ──');
+
+  // 上一段刪掉了一筆交易，清回原始資料，期望值才有固定的基準。
+  // 順便清掉篩選，這頁一定要從預設狀態開始驗
+  await page.evaluate((seed) => {
+    for (const [entity, rows] of Object.entries(seed)) {
+      localStorage.setItem('pb.' + entity, JSON.stringify(rows.map((r) => ({ ...r, _synced: true }))));
+    }
+    localStorage.removeItem('pb.ledger');
+  }, SEED);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+
+  await page.locator('.tab[data-page="ledger"]').click();
+  await page.waitForTimeout(300);
+  await shot(page, '19-明細');
+
+  await checkIn(page, 'ledger-range-text', '2026/01', '期間起點');
+  await checkIn(page, 'ledger-range-text', '共 9 個月', '期間月數');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-buy'], '買進小計');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-sell'], '賣出小計');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-div'], '配息小計');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-net'], '淨流出');
+
+  // 6 筆交易 ＋ 11 筆配息
+  const listed = await page.locator('#ledger-list .entry').count();
+  const okListed = listed === 17;
+  console.log(`  ${okListed ? '✅' : '❌'} 明細列了 ${listed} 筆${okListed ? '' : '，應為 17'}`);
+  if (!okListed) problems.push(`明細列了 ${listed} 筆，應為 17`);
+
+  await page.locator('#ledger-mode .seg__btn[data-mode="split"]').click();
+  await page.waitForTimeout(200);
+  await shot(page, '19b-明細-分開看');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-etf-net'], 'ETF 淨額');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-fund-net'], '基金淨額');
+  await page.locator('#ledger-mode .seg__btn[data-mode="total"]').click();
+
+  /* 亮燈要跟實際篩選對得上。
+     這是驗過數字就以為沒事的典型盲點——小計全對、state 也對，
+     只有 class 被「單選」那個通用 chips 處理器覆蓋掉，畫面上亮錯顆。 */
+  const checkChips = async (label) => {
+    const s = await page.evaluate(() => ({
+      kinds: state.ledger.kinds.slice().sort(),
+      litKinds: [...document.querySelectorAll('#ledger-kinds .chip')]
+        .filter((c) => c.classList.contains('is-active')).map((c) => c.dataset.kind).sort(),
+      styles: state.ledger.styles.slice().sort(),
+      litStyles: [...document.querySelectorAll('#ledger-styles .chip')]
+        .filter((c) => c.classList.contains('is-active')).map((c) => c.dataset.style).sort(),
+    }));
+    const ok = s.kinds.join() === s.litKinds.join() && s.styles.join() === s.litStyles.join();
+    console.log(`  ${ok ? '✅' : '❌'} ${label}：看什麼亮 [${s.litKinds}]、型態亮 [${s.litStyles}]`);
+    if (!ok) {
+      problems.push(`${label} 亮燈對不上：看什麼 state=[${s.kinds}] 亮=[${s.litKinds}]`
+        + `；型態 state=[${s.styles}] 亮=[${s.litStyles}]`);
+    }
+  };
+  await checkChips('預設全勾');
+
+  // 只看配息：型態那排要變灰，因為它只作用在買賣上
+  await page.locator('#ledger-kinds .chip[data-kind="buy"]').click();
+  await page.locator('#ledger-kinds .chip[data-kind="sell"]').click();
+  await page.waitForTimeout(200);
+  await shot(page, '19c-明細-純配息');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-div'], '純配息小計');
+
+  await checkChips('只勾配息');
+
+  const dimmed = await page.locator('#ledger-style-row.is-off').count();
+  console.log(`  ${dimmed ? '✅' : '❌'} 只看配息時型態那排變灰`);
+  if (!dimmed) problems.push('只看配息時型態那排沒有變灰');
+
+  // 只看定期定額的扣款
+  await page.locator('#ledger-kinds .chip[data-kind="buy"]').click();
+  await page.locator('#ledger-kinds .chip[data-kind="dividend"]').click();
+  await page.locator('#ledger-styles .chip[data-style="單筆"]').click();
+  await page.waitForTimeout(200);
+  await shot(page, '19d-明細-定期定額');
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-regular'], '定期定額小計');
+  await checkIn(page, 'ledger-filter-hint', '2 筆沒記型態', '沒記型態的有講出來');
+  await checkChips('買進＋定期定額');
+
+  // 全部期間：期初那筆沒有月份，不該混進來（9 筆不是 10 筆）
+  await page.locator('#ledger-styles .chip[data-style="單筆"]').click();
+  await page.locator('#ledger-range .yearbar__btn[data-range="all"]').click();
+  await page.waitForTimeout(200);
+  await checkIn(page, 'ledger-tally', EXPECT['ledger-all-buy'], '全部期間的買進');
+  await checkIn(page, 'ledger-tally', '9 筆', '期初那筆沒有混進來');
+
+  // 自訂期間。用下拉不用 <input type="month">：iOS Safari 不支援，會默默變成文字框
+  await page.locator('#ledger-range .yearbar__btn[data-range="custom"]').click();
+  await page.waitForTimeout(200);
+
+  // 選項從最早一筆（2025/01）到本月（2026/09）＝ 21 個月
+  const monthOpts = await page.locator('#ledger-from option').count();
+  const okOpts = monthOpts === 21;
+  console.log(`  ${okOpts ? '✅' : '❌'} 自訂期間有 ${monthOpts} 個月可選${okOpts ? '' : '，應為 21'}`);
+  if (!okOpts) problems.push(`自訂期間的月份選項有 ${monthOpts} 個，應為 21`);
+
+  await page.selectOption('#ledger-from', '2026-07');
+  await page.waitForTimeout(250);
+  await shot(page, '19e-明細-自訂期間');
+  await checkIn(page, 'ledger-range-text', '2026/07', '自訂起點生效');
+  await checkIn(page, 'ledger-range-text', '共 3 個月', '自訂期間的月數');
+
+  // 恢復預設，後面的測試才不會吃到這裡留下的篩選
+  await page.locator('#ledger-kinds .chip[data-kind="sell"]').click();
+  await page.locator('#ledger-kinds .chip[data-kind="dividend"]').click();
+  await page.locator('#ledger-range .yearbar__btn[data-range="year"]').click();
+  await page.waitForTimeout(200);
+
+  // 下一段從設定頁開始，先回去
+  await page.locator('#btn-settings').click();
+  await page.waitForTimeout(250);
+
   console.log('\n── 深色 ──');
   await page.locator('#theme-chips .chip[data-theme-pref="dark"]').click();
   await page.waitForTimeout(300);
@@ -708,6 +961,13 @@ async function run() {
   await page.locator('.tab[data-page="report"]').click();
   await page.waitForTimeout(300);
   await shot(page, '14-報表-深色');
+
+  // 兩欄對比在深色底下的樣子 —— 色塊用的是 --etf-weak / --fund-weak，兩套主題各有一組
+  await page.locator('#report-mode .seg__btn[data-mode="split"]').click();
+  await page.waitForTimeout(250);
+  await shot(page, '14b-報表-分開看-深色');
+  await page.locator('#report-mode .seg__btn[data-mode="total"]').click();
+  await page.waitForTimeout(200);
 
   await page.locator('.tab[data-page="holdings"]').click();
   await page.waitForTimeout(300);

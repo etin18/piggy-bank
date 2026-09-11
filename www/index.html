@@ -69,6 +69,20 @@
         </div>
       </div>
 
+      <!-- 照配息頻率推算，哪幾期該有卻沒有紀錄。沒問題時整張不出現 -->
+      <div class="alert" id="missing-card" hidden>
+        <div class="alert__head">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 7.5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="16.2" r="1.1" fill="currentColor"/>
+          </svg>
+          <span id="missing-title">確認一下</span>
+        </div>
+        <div class="alert__list" id="missing-list"></div>
+        <p class="alert__foot" id="missing-foot" hidden></p>
+      </div>
+
       <!-- 第一層：選類別 -->
       <p class="section-title">要記錄什麼？</p>
       <div class="picker">
@@ -139,37 +153,52 @@
     <!-- ---------- 分頁 2：報表 ---------- -->
     <section class="page" id="page-report" aria-label="報表" hidden>
 
-      <div class="yearbar" id="year-bar"></div>
+      <!-- 年份切換旁邊那顆切換整頁：合計，或 ETF／基金 分開看 -->
+      <div class="reportbar">
+        <div class="yearbar" id="year-bar"></div>
+        <div class="seg" id="report-mode">
+          <button class="seg__btn is-active" type="button" data-mode="total">合計</button>
+          <button class="seg__btn" type="button" data-mode="split">分開看</button>
+        </div>
+      </div>
 
       <div class="card">
         <h2 class="card__title">配息</h2>
-        <div class="stat-row">
-          <div class="stat">
-            <span class="stat__label">全年累積</span>
-            <strong class="stat__value" id="rp-total">$0</strong>
+
+        <div id="rp-div-total">
+          <div class="stat-row">
+            <div class="stat">
+              <span class="stat__label">全年累積</span>
+              <strong class="stat__value" id="rp-total">$0</strong>
+            </div>
+            <div class="stat">
+              <span class="stat__label" id="rp-avg-label">平均每月</span>
+              <strong class="stat__value" id="rp-avg">$0</strong>
+            </div>
           </div>
-          <div class="stat">
-            <span class="stat__label" id="rp-avg-label">平均每月</span>
-            <strong class="stat__value" id="rp-avg">$0</strong>
+          <div class="split">
+            <div class="split__item split__item--etf">
+              <span>ETF</span><strong id="rp-etf">$0</strong>
+            </div>
+            <div class="split__item split__item--fund">
+              <span>基金</span><strong id="rp-fund">$0</strong>
+            </div>
           </div>
         </div>
-        <div class="split">
-          <div class="split__item split__item--etf">
-            <span>ETF</span><strong id="rp-etf">$0</strong>
-          </div>
-          <div class="split__item split__item--fund">
-            <span>基金</span><strong id="rp-fund">$0</strong>
-          </div>
+
+        <div id="rp-div-split" hidden>
+          <div class="cmp" id="rp-div-cmp"></div>
+          <p class="hint">配息率 ＝ 當年配息 ÷ 該年度結束時的投入成本。
+            兩邊投進去的錢不一樣多，只比金額會看反。</p>
         </div>
       </div>
 
       <div class="card">
         <h2 class="card__title">每月配息</h2>
         <div class="chart" id="chart"></div>
-        <div class="legend">
-          <span class="legend__item"><i class="legend__swatch legend__swatch--etf"></i>ETF</span>
-          <span class="legend__item"><i class="legend__swatch legend__swatch--fund"></i>基金</span>
-        </div>
+        <div class="gchart" id="chart-split" hidden></div>
+        <div class="legend" id="chart-legend"></div>
+        <p class="hint" id="chart-hint" hidden></p>
       </div>
 
       <div class="card">
@@ -181,18 +210,31 @@
 
       <div class="card">
         <h2 class="card__title">投入與損益</h2>
-        <p class="card__sub">全期間累計，不分年份</p>
-        <div class="kv"><span>累計投入成本</span><strong id="rp-cost">$0</strong></div>
-        <div class="kv"><span>目前市值</span><strong id="rp-value">$0</strong></div>
-        <div class="kv"><span>未實現損益</span><strong id="rp-unreal">$0</strong></div>
-        <div class="kv"><span>已實現損益</span><strong id="rp-real">$0</strong></div>
-        <div class="split" id="rp-real-split" hidden>
-          <div class="split__item split__item--etf"><span>ETF</span><strong id="rp-real-etf">$0</strong></div>
-          <div class="split__item split__item--fund"><span>基金</span><strong id="rp-real-fund">$0</strong></div>
+        <p class="card__sub">手上的部位，不分年份</p>
+
+        <div id="rp-pl-total">
+          <div class="kv"><span>累計投入成本</span><strong id="rp-cost">$0</strong></div>
+          <div class="kv"><span>目前市值</span><strong id="rp-value">$0</strong></div>
+          <div class="kv"><span>未實現損益</span><strong id="rp-unreal">$0</strong></div>
+          <div class="kv"><span>已實現損益</span><strong id="rp-real">$0</strong></div>
+          <div class="split" id="rp-real-split" hidden>
+            <div class="split__item split__item--etf"><span>ETF</span><strong id="rp-real-etf">$0</strong></div>
+            <div class="split__item split__item--fund"><span>基金</span><strong id="rp-real-fund">$0</strong></div>
+          </div>
+          <!-- 全期間所有配息，含已經出清的部位。
+               持股頁那個「累計配息」只算目前持有的，兩個數字不一樣，名字要分開 -->
+          <div class="kv"><span>存錢筒累計配息</span><strong id="rp-alldiv">$0</strong></div>
         </div>
-        <!-- 全期間所有配息，含已經出清的部位。
-             持股頁那個「累計配息」只算目前持有的，兩個數字不一樣，名字要分開 -->
-        <div class="kv"><span>存錢筒累計配息</span><strong id="rp-alldiv">$0</strong></div>
+
+        <div class="cmp" id="rp-pl-cmp" hidden></div>
+
+        <!-- 跟持股頁同一個開關，切了兩邊一起變 -->
+        <label class="toggle toggle--inline" id="rp-fee-toggle">
+          <input type="checkbox" id="rp-exclude-fee">
+          <span class="toggle__box" aria-hidden="true"></span>
+          <span>投入成本不含手續費</span>
+        </label>
+
         <p class="hint" id="rp-price-hint" hidden></p>
       </div>
     </section>
@@ -263,6 +305,79 @@
         </div>
         <p class="empty__title">還沒有持股</p>
         <p class="empty__hint">到「記錄」記下第一筆買進</p>
+      </div>
+    </section>
+
+    <!-- ---------- 分頁 4：明細 ---------- -->
+    <section class="page" id="page-ledger" aria-label="明細" hidden>
+
+      <div class="card">
+        <!-- 五顆要塞進一支手機的寬度，所以用「近半年」不用「近 6 個月」 -->
+        <div class="yearbar yearbar--tight" id="ledger-range">
+          <button class="yearbar__btn" type="button" data-range="recent6">近半年</button>
+          <button class="yearbar__btn" type="button" data-range="recent12">近一年</button>
+          <button class="yearbar__btn is-active" type="button" data-range="year">今年</button>
+          <button class="yearbar__btn" type="button" data-range="all">全部</button>
+          <button class="yearbar__btn" type="button" data-range="custom">自訂</button>
+        </div>
+
+        <div class="range" id="ledger-range-text"></div>
+
+        <!-- 自訂期間。用 select 不用 <input type="month">：iOS Safari 不支援 month，
+             會默默降級成一個純文字框 -->
+        <div class="range-pick" id="ledger-custom" hidden>
+          <select class="input" id="ledger-from" aria-label="開始月份"></select>
+          <span class="range-pick__sep">～</span>
+          <select class="input" id="ledger-to" aria-label="結束月份"></select>
+        </div>
+
+        <div class="filter-row">
+          <span class="filter-row__label">看什麼</span>
+          <div class="chips chips--wrap chips--multi" id="ledger-kinds">
+            <button class="chip" type="button" data-kind="buy">買進</button>
+            <button class="chip" type="button" data-kind="sell">賣出</button>
+            <button class="chip" type="button" data-kind="dividend">配息</button>
+          </div>
+        </div>
+
+        <div class="filter-row" id="ledger-style-row">
+          <span class="filter-row__label">型態</span>
+          <div class="chips chips--wrap chips--multi" id="ledger-styles">
+            <button class="chip" type="button" data-style="小額">定期定額</button>
+            <button class="chip" type="button" data-style="單筆">單筆</button>
+          </div>
+        </div>
+
+        <p class="hint" id="ledger-filter-hint" hidden></p>
+      </div>
+
+      <div class="card" id="ledger-tally-card">
+        <div class="card__head">
+          <h2 class="card__title">小計</h2>
+          <div class="seg" id="ledger-mode">
+            <button class="seg__btn is-active" type="button" data-mode="total">合計</button>
+            <button class="seg__btn" type="button" data-mode="split">分開看</button>
+          </div>
+        </div>
+        <div id="ledger-tally"></div>
+        <p class="hint" id="ledger-fee-hint" hidden></p>
+      </div>
+
+      <div class="card" id="ledger-list-card">
+        <h2 class="card__title">明細</h2>
+        <p class="card__sub">點一下就能改那筆</p>
+        <div class="ledger-list" id="ledger-list"></div>
+        <p class="hint" id="ledger-more" hidden></p>
+      </div>
+
+      <div class="empty" id="ledger-empty" hidden>
+        <div class="empty__icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" width="56" height="56" fill="none">
+            <path d="M8 12h32M14 24h20M20 36h8" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="empty__title">這段期間沒有紀錄</p>
+        <p class="empty__hint" id="ledger-empty-hint">換個期間，或多勾幾種看看</p>
       </div>
     </section>
 
@@ -346,6 +461,12 @@
         <path d="M3 12h18" stroke="currentColor" stroke-width="2"/>
       </svg>
       <span>持股</span>
+    </button>
+    <button class="tab" data-page="ledger" role="tab" aria-selected="false" type="button">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+        <path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>明細</span>
     </button>
   </nav>
 

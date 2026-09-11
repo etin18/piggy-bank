@@ -1,3 +1,6 @@
 shots/
 node_modules/
 .DS_Store
+
+# 真實資料快照（只在本機用，絕對不能進版控）
+www/_snapshot*

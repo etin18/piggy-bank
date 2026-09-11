@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v20';
+const APP_VERSION = 'v21';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -32,6 +32,8 @@ const LS = {
   theme: 'pb.theme',
   fields: 'pb.fields',    // 持股頁要顯示哪些資訊，只存在這台裝置
   excludeFee: 'pb.excludeFee',
+  reportSplit: 'pb.reportSplit',
+  ledger: 'pb.ledger',    // 明細頁的期間與篩選
   apiVersion: 'pb.apiVersion',
   data: 'pb.',            // pb.instruments、pb.trades …
 };
@@ -49,6 +51,23 @@ const HOLDING_FIELDS = [
 ];
 
 const DEFAULT_FIELDS = ['avg', 'price', 'rate'];
+
+/** 明細頁的期間快捷 */
+const LEDGER_RANGES = ['recent6', 'recent12', 'year', 'all', 'custom'];
+
+/**
+ * 明細頁「看什麼」的三種。
+ * 入金出金不在這裡 —— 它沒有標的也沒有型態，ETF／基金 分開看時只能靠帳戶歸邊，
+ * 跟這三種不是同一個層級的東西，混在同一排會讓人以為它也吃型態篩選。
+ */
+const LEDGER_KINDS = [
+  { key: 'buy', label: '買進' },
+  { key: 'sell', label: '賣出' },
+  { key: 'dividend', label: '配息' },
+];
+
+/** 一次最多列這麼多筆 */
+const LEDGER_LIMIT = 300;
 
 /** 五張表的名字，同步與本機儲存都照這個順序跑 */
 const ENTITIES = ['instruments', 'trades', 'dividends', 'cashflows', 'prices'];
@@ -91,6 +110,17 @@ const state = {
   showAllRecent: false,  // 首頁的最近紀錄是否展開全部
   fields: DEFAULT_FIELDS.slice(),   // 持股卡片顯示哪些資訊
   excludeFee: false,     // 投入成本要不要把手續費算進去
+  reportSplit: false,    // 報表頁：合計，或 ETF／基金 分開看
+
+  // 明細頁的篩選，整包存在這台裝置
+  ledger: {
+    range: 'year',       // recent6 / recent12 / year / all / custom
+    from: '',            // 'YYYY-MM'，自訂期間才用
+    to: '',
+    kinds: ['buy', 'sell', 'dividend'],
+    styles: ['小額', '單筆'],
+    split: false,
+  },
   detailId: null,        // 正在看明細的標的
   detailFilter: 'all',
   returnToDetail: null,  // 關掉編輯面板後要回到哪一檔的明細
@@ -237,6 +267,22 @@ function loadLocal() {
     state.theme = localStorage.getItem(LS.theme) || 'light';
     state.apiVersion = localStorage.getItem(LS.apiVersion) || '';
     state.excludeFee = localStorage.getItem(LS.excludeFee) === '1';
+    state.reportSplit = localStorage.getItem(LS.reportSplit) === '1';
+
+    // 明細頁的篩選：只收認得的值，改版後留下的舊 key 直接丟掉
+    const ledger = JSON.parse(localStorage.getItem(LS.ledger) || 'null');
+    if (ledger && typeof ledger === 'object') {
+      if (LEDGER_RANGES.includes(ledger.range)) state.ledger.range = ledger.range;
+      if (typeof ledger.from === 'string') state.ledger.from = ledger.from;
+      if (typeof ledger.to === 'string') state.ledger.to = ledger.to;
+      if (Array.isArray(ledger.kinds)) {
+        state.ledger.kinds = ledger.kinds.filter((k) => LEDGER_KINDS.some((x) => x.key === k));
+      }
+      if (Array.isArray(ledger.styles)) {
+        state.ledger.styles = ledger.styles.filter((s) => s === '小額' || s === '單筆');
+      }
+      state.ledger.split = !!ledger.split;
+    }
 
     const saved = JSON.parse(localStorage.getItem(LS.fields) || 'null');
     if (Array.isArray(saved)) {
@@ -613,9 +659,18 @@ function assignDividends(rounds, dividends) {
 /**
  * 所有部位。ETF 一檔一個；基金一檔分「單筆」與「定期定額」兩個。
  * 每個部位帶著自己的持有回合，最後一段沒結束就是目前持有中的。
+ *
+ * 傳 asOf（'YYYY-MM-DD'）就只算到那天為止，用來回推「那個時點手上有多少成本」
+ * —— 報表頁的配息率要拿年度末的成本當分母，不然會變成用今天的持股
+ * 去除去年的配息，中間賣掉什麼那個百分比就沒意義了。
+ *
+ * 注意：現價永遠是最新的那一筆，所以 asOf 模式下 value / unrealized
+ * 不是「那天的市值」，別拿去算歷史損益。要的是 cost。
  */
-function buildPositions() {
+function buildPositions(asOf) {
   const map = new Map();
+  const limit = asOf ? sortKey(asOf) : null;
+  const within = (date) => !limit || sortKey(date) <= limit;
 
   const ensure = (inst, style) => {
     const key = positionKey(inst.id, inst.type, style);
@@ -633,11 +688,14 @@ function buildPositions() {
   };
 
   for (const t of live('trades')) {
+    if (!within(t.date)) continue;
     const inst = instrumentById(t.instrumentId);
     if (inst) ensure(inst, t.style).trades.push(t);
   }
 
   for (const d of live('dividends')) {
+    // 配息用除息日歸屬，跟 assignDividends 一致
+    if (!within(d.exDate || d.payDate)) continue;
     const inst = instrumentById(d.instrumentId);
     if (!inst) continue;
 
@@ -687,6 +745,9 @@ function buildPositions() {
       hasPrice: priced,
       avgPrice: current && current.qty > EPS ? current.costExFee / current.qty : 0,
       unrealized: priced ? value - cost : null,
+      // trades 是陣列，但同名的 dividends 在這裡是「目前回合的配息金額」——
+      // 上面展開進來的那個同名陣列會被它蓋掉。要原始紀錄請用 dividendRows
+      dividendRows: position.dividends,
       dividends: current ? current.dividends : 0,
       hasEstimate: current ? current.hasEstimate : false,
       oversold: rounds.some((r) => r.oversold),
@@ -763,12 +824,181 @@ function dividendStats(year) {
   return { months, etf, fund, total: etf + fund };
 }
 
+/* ---------- 漏記偵測 ---------- */
+
+/** 配息頻率 → 幾個月一次。沒填或「不配息」的不檢查 */
+const DIVIDEND_GAP = { 月配: 1, 季配: 3, 半年配: 6, 年配: 12 };
+
+/**
+ * 寬限期（天）：間隔的一半，最少 30 天。
+ *
+ * 開這麼寬是故意的。版本警告那條教訓——警告一旦常出現就會被當成背景雜訊，
+ * 真的該注意時反而會漏掉。月配要整整漏掉一期才會講話。
+ */
+function dividendGrace(gap) {
+  return Math.max(30, Math.round(gap * 30.4 / 2));
+}
+
+function addMonths(date, n) {
+  const [y, m, d] = String(date).split('-').map(Number);
+  return new Date(y, m - 1 + n, d);
+}
+
+function toYmd(dt) {
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const d = String(dt.getDate()).padStart(2, '0');
+  return `${dt.getFullYear()}-${m}-${d}`;
+}
+
+/** 'YYYY-MM-DD' → 年×12＋月，用來算差幾個月 */
+function ymNumber(ymd) {
+  return Number(String(ymd).slice(0, 4)) * 12 + Number(String(ymd).slice(5, 7));
+}
+
+function fmtYm(ymd) {
+  return `${String(ymd).slice(0, 4)}/${String(ymd).slice(5, 7)}`;
+}
+
+function monthsSince(ymd) {
+  return Math.max(0, ymNumber(todayStr()) - ymNumber(ymd));
+}
+
+/** 那天這個部位手上還有東西嗎 */
+function heldAt(position, ymd) {
+  const key = sortKey(ymd);
+  return position.rounds.some((round) => {
+    const start = sortKey(round.startDate);
+    const end = round.closed ? sortKey(round.endDate) : '9999-99-99';
+    return key >= start && key <= end;
+  });
+}
+
+/**
+ * 照配息頻率推算，找出「那期該有、卻沒有紀錄」的配息。
+ *
+ * 這是整本簿子唯一會主動開口的地方。所有數字都建立在「記錄是完整的」上頭，
+ * 漏記一筆不會產生任何矛盾，只會安靜地少一塊——沒人守著就永遠不會發現。
+ *
+ * 三件事跟直覺不一樣，都是拿真實資料跑過才知道的：
+ *
+ *   1. 用**除息日**推算，不是發放日。除息日是固定的（實際資料裡某檔連續四季
+ *      都在 19 號），發放日則浮動：ETF 落後 20～26 天、基金 5～7 天。
+ *      用發放日推，間隔會忽長忽短，寬限期就得開更大才不誤報。
+ *   2. 基金**照部位分開**檢查。單筆與定期定額是兩筆獨立的投資明細，
+ *      同一個除息日各配一次是正常的，混在一起看會被當成重複記帳。
+ *   3. 從沒配過的標的要等**兩個間隔**才問。剛買進還沒輪到第一次除息是常態。
+ *
+ * 某期的預期除息日當天沒持有（還沒買、或早就賣掉了）就不算漏。出清之後的
+ * 最後一期因此仍會被問——那筆常常是除息後才賣、賣掉之後錢才入帳的。
+ */
+function findMissingDividends() {
+  const today = todayStr();
+  const out = [];
+
+  for (const position of buildPositions()) {
+    const gap = DIVIDEND_GAP[position.instrument.frequency];
+    if (!gap) continue;
+
+    const dates = position.dividendRows
+      .map((d) => d.exDate || d.payDate)
+      .filter(Boolean)
+      .sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
+    if (dates.length) {
+      // 推算的月份跟實際除息月份會差一點，容忍半個間隔
+      const tolerance = Math.floor(gap / 2);
+      const seen = dates.map(ymNumber);
+      const misses = [];
+
+      for (let i = 1; i < 200; i += 1) {
+        const dueDate = addMonths(dates[0], gap * i);
+        const due = toYmd(dueDate);
+        if (due > today) break;
+
+        const deadline = new Date(dueDate);
+        deadline.setDate(deadline.getDate() + dividendGrace(gap));
+        if (toYmd(deadline) > today) continue;                       // 還在寬限期內
+        if (!heldAt(position, due)) continue;                        // 那天沒持有
+        if (seen.some((m) => Math.abs(m - ymNumber(due)) <= tolerance)) continue;
+
+        misses.push(due);
+      }
+
+      if (misses.length) {
+        out.push({ position, due: misses[0], count: misses.length, kind: 'gap' });
+      }
+      continue;
+    }
+
+    // 一次都沒領過。已經出清的就算了，那檔的故事已經結束
+    if (position.qty <= EPS) continue;
+
+    const firstBuy = position.trades
+      .filter((t) => t.action !== SELL && t.date && t.date !== PRE)
+      .map((t) => t.date)
+      .sort()[0];
+    if (!firstBuy) continue;
+
+    if (toYmd(addMonths(firstBuy, gap * 2)) <= today) {
+      out.push({ position, due: firstBuy, count: 0, kind: 'never' });
+    }
+  }
+
+  // 最舊的排前面——擱最久的最可能已經忘了
+  return out.sort((a, b) => sortKey(a.due).localeCompare(sortKey(b.due)));
+}
+
 /** 今年只算到這個月為止，去年以前就是整整 12 個月 */
 function monthsElapsed(year) {
   const now = new Date();
   if (year > now.getFullYear()) return 1;
   if (year < now.getFullYear()) return 12;
   return now.getMonth() + 1;
+}
+
+/** 那一年的結算日。今年還沒過完，就結算到今天為止 */
+function yearEndOf(year) {
+  return year >= thisYear() ? todayStr() : `${year}-12-31`;
+}
+
+/**
+ * 報表頁「分開看」的一欄：ETF 或基金，各自一份。
+ *
+ * 配息看的是「那一年」，投入成本與損益看的是「現在手上有什麼」——
+ * 一個是現金流、一個是部位，本來就是兩個問題。
+ *
+ * 只有配息率同時吃到兩邊，所以它的分母要退回年度末：
+ * 拿去年領的息去除今年的持股，中間賣掉什麼那個百分比就不成立了。
+ */
+function typeStats(year, type) {
+  const divided = dividendStats(year);
+  const dividends = type === ETF ? divided.etf : divided.fund;
+
+  const positions = buildPositions().filter((p) => p.type === type);
+  const held = positions.filter((p) => p.qty > EPS);
+
+  const cost = held.reduce((s, p) => s + p.cost, 0);
+  const value = held.reduce((s, p) => s + (p.hasPrice ? p.value : p.cost), 0);
+  const realized = positions.reduce(
+    (sum, p) => sum + p.rounds.reduce((a, r) => a + r.realized, 0), 0
+  );
+
+  const base = buildPositions(yearEndOf(year))
+    .filter((p) => p.type === type && p.qty > EPS)
+    .reduce((sum, p) => sum + p.cost, 0);
+
+  return {
+    dividends,
+    cost,
+    value,
+    realized,
+    unrealized: value - cost,
+    fee: held.reduce((sum, p) => sum + p.fee, 0),
+    // 那年結束時已經清空（或還沒開始）就算不出比率，顯示破折號而不是 0%
+    yieldRate: base > 0 ? dividends / base : null,
+    // 基金的兩個部位共用一個淨值，照標的去重才不會多算
+    missing: new Set(held.filter((p) => !p.hasPrice).map((p) => p.instrument.id)).size,
+  };
 }
 
 /** 有紀錄的年份，加上今年，新的在前面 */
@@ -785,6 +1015,159 @@ function availableYears() {
   return [...years].sort((a, b) => b - a);
 }
 
+/* ---------- 明細頁：期間與篩選 ---------- */
+
+const ymOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+/** 這個月往前推 n 個月 */
+function monthBack(n) {
+  const now = new Date();
+  return ymOf(new Date(now.getFullYear(), now.getMonth() - n, 1));
+}
+
+/** 有紀錄的最早月份。期初沒有月份，不算在內 */
+function earliestMonth() {
+  let earliest = '';
+  const take = (date) => {
+    if (!date || date === PRE) return;
+    const ym = String(date).slice(0, 7);
+    if (ym.length === 7 && (!earliest || ym < earliest)) earliest = ym;
+  };
+  for (const t of live('trades')) take(t.date);
+  for (const d of live('dividends')) take(d.payDate);
+  return earliest || ymOf(new Date());
+}
+
+/** 明細頁目前框住的期間，'YYYY-MM'，兩端都含 */
+function ledgerRange() {
+  const now = ymOf(new Date());
+  const L = state.ledger;
+
+  if (L.range === 'recent6') return { from: monthBack(5), to: now };
+  if (L.range === 'recent12') return { from: monthBack(11), to: now };
+  if (L.range === 'year') return { from: `${thisYear()}-01`, to: now };
+  if (L.range === 'custom' && L.from && L.to) {
+    // 起迄選反了就掉過來，不要回一段永遠是空的期間
+    return L.from <= L.to ? { from: L.from, to: L.to } : { from: L.to, to: L.from };
+  }
+  return { from: earliestMonth(), to: now };
+}
+
+/** 期間橫跨幾個月，兩端都算 */
+function monthSpan(from, to) {
+  const [fy, fm] = from.split('-').map(Number);
+  const [ty, tm] = to.split('-').map(Number);
+  return Math.max(1, (ty - fy) * 12 + (tm - fm) + 1);
+}
+
+function fmtMonth(ym) {
+  return String(ym).replace('-', '/');
+}
+
+/** 自訂期間的下拉選項：最早一筆到本月，不給未來的月份 */
+function monthList() {
+  const out = [];
+  const first = earliestMonth();
+  const now = ymOf(new Date());
+  let d = new Date(Number(first.slice(0, 4)), Number(first.slice(5, 7)) - 1, 1);
+
+  for (let i = 0; i < 600; i += 1) {   // 防呆上限，正常跑不到
+    const ym = ymOf(d);
+    out.push(ym);
+    if (ym >= now) break;
+    d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  }
+  return out;
+}
+
+/**
+ * 交易上記的型態。沒填就是沒填 —— 不要跟「小額」混為一談。
+ *
+ * normalizeStyle() 把空值當小額，那是為了讓基金的部位有地方可掛；
+ * 但在明細頁，把沒記型態的買進算進「定期定額」，數字看起來會很合理卻是錯的。
+ */
+function styleOf(record) {
+  if (record.style === '單筆') return '單筆';
+  if (record.style === '小額') return '小額';
+  return '';
+}
+
+/**
+ * 明細頁：期間內、勾選中的紀錄，新的在前。
+ *
+ * 兩種型態都勾等於不篩，沒記型態的也留著；只勾一種時它們會被排掉，
+ * 所以另外數出來，在畫面上講一聲，免得以為那幾筆憑空不見了。
+ */
+function ledgerEntries() {
+  const { from, to } = ledgerRange();
+  const { kinds, styles } = state.ledger;
+  const wanted = styles.length === 2 ? null : styles;
+  const out = [];
+  let untagged = 0;
+
+  // 期初沒有月份，規格上也不計入任何月份的統計，所以不進明細
+  const inRange = (date) => {
+    if (!date || date === PRE) return false;
+    const ym = String(date).slice(0, 7);
+    return ym >= from && ym <= to;
+  };
+
+  for (const t of live('trades')) {
+    if (!inRange(t.date)) continue;
+    if (!kinds.includes(t.action === SELL ? 'sell' : 'buy')) continue;
+
+    const style = styleOf(t);
+    if (wanted && !wanted.includes(style)) {
+      if (!style) untagged += 1;
+      continue;
+    }
+    out.push({ kind: 'trade', record: t, date: t.date, type: typeOfTrade(t) });
+  }
+
+  if (kinds.includes('dividend')) {
+    for (const d of live('dividends')) {
+      if (!inRange(d.payDate)) continue;
+      out.push({ kind: 'dividend', record: d, date: d.payDate, type: typeOfTrade(d) });
+    }
+  }
+
+  out.sort((a, b) => {
+    const cmp = sortKey(b.date).localeCompare(sortKey(a.date));
+    return cmp || String(b.record.createdAt || '').localeCompare(String(a.record.createdAt || ''));
+  });
+
+  return { entries: out, untagged };
+}
+
+/**
+ * 小計。金額用「帳戶實扣／實收」，跟對帳單上扣的數字一樣。
+ * 勾了「不含手續費」就退回成交金額 —— 那時候淨額不再等於帳戶的實際變動，畫面上要講。
+ */
+function ledgerTally(entries) {
+  const blank = () => ({ buy: 0, sell: 0, dividend: 0, buyN: 0, sellN: 0, divN: 0, net: 0 });
+  const box = { [ETF]: blank(), [FUND]: blank() };
+
+  for (const e of entries) {
+    const b = box[e.type] || box[ETF];
+    const r = e.record;
+
+    if (e.kind === 'dividend') {
+      b.dividend += Number(r.received) || 0;
+      b.divN += 1;
+      continue;
+    }
+
+    const amount = state.excludeFee ? (Number(r.amount) || 0) : (Number(r.cash) || 0);
+    if (r.action === SELL) { b.sell += amount; b.sellN += 1; }
+    else { b.buy += amount; b.buyN += 1; }
+  }
+
+  for (const type of [ETF, FUND]) {
+    box[type].net = box[type].dividend + box[type].sell - box[type].buy;
+  }
+  return box;
+}
+
 /* ==========================================================================
    渲染
    ========================================================================== */
@@ -794,6 +1177,7 @@ function render() {
   $('page-record').hidden = page !== 'record';
   $('page-report').hidden = page !== 'report';
   $('page-holdings').hidden = page !== 'holdings';
+  $('page-ledger').hidden = page !== 'ledger';
   $('page-settings').hidden = page !== 'settings';
 
   for (const tab of document.querySelectorAll('.tab')) {
@@ -803,12 +1187,15 @@ function render() {
   }
   $('btn-settings').classList.toggle('is-active', page === 'settings');
 
-  const titles = { record: '存錢筒', report: '報表', holdings: '持股', settings: '設定' };
+  const titles = {
+    record: '存錢筒', report: '報表', holdings: '持股', ledger: '明細', settings: '設定',
+  };
   $('topbar-title').textContent = titles[page] || '存錢筒';
 
   if (page === 'record') renderRecord();
   if (page === 'report') renderReport();
   if (page === 'holdings') renderHoldings();
+  if (page === 'ledger') renderLedger();
   if (page === 'settings') renderSettings();
 }
 
@@ -831,7 +1218,64 @@ function renderRecord() {
   actions.hidden = !state.category;
   if (state.category) $('actions-title').textContent = state.category;
 
+  renderMissing();
   renderRecent();
+}
+
+/** 首頁最多列這麼多期，再多就只講數量 */
+const MISSING_LIMIT = 5;
+
+/** 漏記提醒。沒事的時候整張卡不出現 */
+function renderMissing() {
+  const items = findMissingDividends();
+  const card = $('missing-card');
+
+  card.hidden = items.length === 0;
+  if (!items.length) return;
+
+  // 一個部位可能缺好幾期，標題講總期數，列表照部位聚合 —— 兩邊要加得起來
+  const total = items.reduce((sum, i) => sum + Math.max(1, i.count), 0);
+  $('missing-title').textContent = total === 1
+    ? '有一期好像還沒記'
+    : `有 ${total} 期好像還沒記`;
+
+  const shown = items.slice(0, MISSING_LIMIT);
+  $('missing-list').innerHTML = shown.map((item) => {
+    const p = item.position;
+    // 基金要連部位一起講 —— 單筆和定期定額是分開發的，只講標的名會不知道補哪一邊
+    const name = p.type === FUND
+      ? `${instrumentName(p.instrument.id)} · ${styleLabel(p.style, p.type)}`
+      : instrumentName(p.instrument.id);
+
+    const freq = p.instrument.frequency || '';
+    let meta;
+    if (item.kind === 'never') {
+      meta = `${freq} · 買了 ${monthsSince(item.due)} 個月，一次都還沒領過`;
+    } else if (item.count > 1) {
+      meta = `${freq} · ${fmtYm(item.due)} 起有 ${item.count} 期沒記`;
+    } else {
+      meta = `${freq} · ${fmtYm(item.due)} 那期沒記`;
+    }
+
+    return `
+      <button class="alert__item" type="button"
+              data-missing-id="${escapeHtml(p.instrument.id)}"
+              data-missing-style="${escapeHtml(p.style || '')}"
+              data-missing-date="${escapeHtml(item.kind === 'never' ? '' : item.due)}">
+        <span class="alert__body">
+          <span class="alert__name">${escapeHtml(name)}</span>
+          <span class="alert__meta">${escapeHtml(meta)}</span>
+        </span>
+        <span class="alert__go">去記 ›</span>
+      </button>`;
+  }).join('');
+
+  // 猜錯了要有出路：記一筆 0 元，那期就補起來了，也不用另外做忽略清單
+  const extra = items.length - shown.length;
+  const foot = $('missing-foot');
+  foot.hidden = false;
+  foot.textContent = (extra ? `還有 ${extra} 期沒列出來。` : '')
+    + '那一期本來就沒配（或配 0）的話，記一筆 0 元就不會再問。';
 }
 
 /** 首頁預設只列這麼多，其餘收在「查看全部」後面 */
@@ -964,8 +1408,20 @@ function renderReport() {
       ${y} 年
     </button>`).join('');
 
+  const split = state.reportSplit;
+  for (const btn of document.querySelectorAll('#report-mode .seg__btn')) {
+    btn.classList.toggle('is-active', (btn.dataset.mode === 'split') === split);
+  }
+
   const stats = dividendStats(year);
   const elapsed = monthsElapsed(year);
+  const etf = typeStats(year, ETF);
+  const fund = typeStats(year, FUND);
+
+  /* ---- 配息 ---- */
+
+  $('rp-div-total').hidden = split;
+  $('rp-div-split').hidden = !split;
 
   $('rp-total').textContent = fmtMoney(stats.total);
   $('rp-avg').textContent = fmtMoney(stats.total / elapsed);
@@ -975,43 +1431,99 @@ function renderReport() {
   $('rp-etf').textContent = fmtMoney(stats.etf);
   $('rp-fund').textContent = fmtMoney(stats.fund);
 
-  renderChart(stats, year);
+  if (split) {
+    $('rp-div-cmp').innerHTML =
+      divColHtml(ETF, etf, elapsed) + divColHtml(FUND, fund, elapsed);
+  }
+
+  renderChart(stats, year, split);
+
+  /* ---- 帳戶餘額 ---- */
 
   $('bal-etf').textContent = fmtMoney(balanceOf(ETF));
   $('bal-fund').textContent = fmtMoney(balanceOf(FUND));
 
-  const positions = buildPositions();
-  const held = positions.filter((p) => p.qty > EPS);
+  /* ---- 投入與損益 ---- */
 
-  const cost = held.reduce((s, p) => s + p.cost, 0);
-  const value = held.reduce((s, p) => s + (p.hasPrice ? p.value : p.cost), 0);
-
-  // 已實現損益要算進所有回合，包含賣光之後又買回來的那些
-  const realizedOf = (type) => positions
-    .filter((p) => p.type === type)
-    .reduce((sum, p) => sum + p.rounds.reduce((a, r) => a + r.realized, 0), 0);
-  const realizedEtf = realizedOf(ETF);
-  const realizedFund = realizedOf(FUND);
-
+  const cost = etf.cost + fund.cost;
+  const value = etf.value + fund.value;
+  const realized = etf.realized + fund.realized;
   const allDiv = live('dividends').reduce((s, d) => s + (Number(d.received) || 0), 0);
-  // 基金的兩個部位共用同一個淨值，所以要照標的去重，不然會多算一次
-  const missing = new Set(held.filter((p) => !p.hasPrice).map((p) => p.instrument.id)).size;
+
+  $('rp-pl-total').hidden = split;
+  $('rp-pl-cmp').hidden = !split;
 
   $('rp-cost').textContent = fmtMoney(cost);
   $('rp-value').textContent = fmtMoney(value);
   setPL($('rp-unreal'), value - cost);
-  setPL($('rp-real'), realizedEtf + realizedFund);
+  setPL($('rp-real'), realized);
   $('rp-alldiv').textContent = fmtMoney(allDiv);
 
-  $('rp-real-split').hidden = Math.round(realizedEtf + realizedFund) === 0;
-  $('rp-real-etf').textContent = fmtMoney(realizedEtf, { sign: true });
-  $('rp-real-fund').textContent = fmtMoney(realizedFund, { sign: true });
+  $('rp-real-split').hidden = Math.round(realized) === 0;
+  $('rp-real-etf').textContent = fmtMoney(etf.realized, { sign: true });
+  $('rp-real-fund').textContent = fmtMoney(fund.realized, { sign: true });
 
+  if (split) {
+    $('rp-pl-cmp').innerHTML = plColHtml(ETF, etf) + plColHtml(FUND, fund);
+  }
+
+  $('rp-exclude-fee').checked = state.excludeFee;
+
+  const missing = etf.missing + fund.missing;
   const hint = $('rp-price-hint');
   hint.hidden = missing === 0;
   hint.textContent = missing
     ? `有 ${missing} 檔還沒填現價，市值先用成本計算 —— 到「持股」更新一下比較準。`
     : '';
+}
+
+/** 分開看的一欄：配息。平均每月的分母直接印出來，今年 ÷ 已過月數、去年 ÷ 12 */
+function divColHtml(type, s, elapsed) {
+  const cls = type === ETF ? 'etf' : 'fund';
+  const rate = s.yieldRate === null ? '—' : `${(s.yieldRate * 100).toFixed(1)}%`;
+
+  return `
+    <div class="cmp__col cmp__col--${cls}">
+      <span class="cmp__name">${type}</span>
+      <div class="cmp__row cmp__row--lead">
+        <span>平均每月</span><strong>${fmtMoney(s.dividends / elapsed)}</strong>
+      </div>
+      <div class="cmp__row cmp__row--sub">
+        <span>分母</span><strong>÷ ${elapsed} 個月</strong>
+      </div>
+      <div class="cmp__rule"></div>
+      <div class="cmp__row"><span>全年累積</span><strong>${fmtMoney(s.dividends)}</strong></div>
+      <div class="cmp__row"><span>配息率</span><strong>${rate}</strong></div>
+    </div>`;
+}
+
+/** 分開看的一欄：投入與損益。這裡全是「現在手上有什麼」，只有年度配息是那一年的 */
+function plColHtml(type, s) {
+  const cls = type === ETF ? 'etf' : 'fund';
+  const tone = (v) => (Math.round(v) > 0 ? 'is-gain' : (Math.round(v) < 0 ? 'is-loss' : ''));
+
+  // 手續費那行的講法跟著開關走：算進成本裡的是「其中」，沒算進去的是「另付」
+  const feeLabel = state.excludeFee ? '另付手續費' : '其中手續費';
+
+  return `
+    <div class="cmp__col cmp__col--${cls}">
+      <span class="cmp__name">${type}</span>
+      <div class="cmp__row"><span>投入成本</span><strong>${fmtMoney(s.cost)}</strong></div>
+      <div class="cmp__row cmp__row--sub">
+        <span>${feeLabel}</span><strong>${fmtMoney(s.fee)}</strong>
+      </div>
+      <div class="cmp__row"><span>目前市值</span><strong>${fmtMoney(s.value)}</strong></div>
+      <div class="cmp__rule"></div>
+      <div class="cmp__row">
+        <span>未實現</span>
+        <strong class="${tone(s.unrealized)}">${fmtMoney(s.unrealized, { sign: true })}</strong>
+      </div>
+      <div class="cmp__row">
+        <span>已實現</span>
+        <strong class="${tone(s.realized)}">${fmtMoney(s.realized, { sign: true })}</strong>
+      </div>
+      <div class="cmp__row"><span>年度配息</span><strong>${fmtMoney(s.dividends)}</strong></div>
+    </div>`;
 }
 
 function setPL(el, value) {
@@ -1021,9 +1533,56 @@ function setPL(el, value) {
   el.classList.toggle('is-loss', v < 0);
 }
 
-function renderChart(stats, year) {
-  const max = Math.max(...stats.months.map((m) => m.total), 1);
+/**
+ * 合計看堆疊（這個月總共領多少），分開看換雙柱。
+ *
+ * 換圖形不是為了好看：堆疊圖每根柱都是滿的，看起來像每個月都穩定進帳，
+ * 但 ETF 季配、基金月配這件事整個被疊掉了 —— 而那正是要比的東西。
+ */
+function renderChart(stats, year, split) {
   const currentMonth = year === thisYear() ? new Date().getMonth() + 1 : 0;
+
+  $('chart').hidden = !!split;
+  $('chart-split').hidden = !split;
+
+  if (split) renderGroupedChart(stats, currentMonth);
+  else renderStackedChart(stats, currentMonth);
+
+  // 圖例要寫出左右 —— 兩色在色盲模擬下幾乎同色，位置才是真正分得出來的線索
+  $('chart-legend').innerHTML = `
+    <span class="legend__item">
+      <i class="legend__swatch legend__swatch--etf"></i>ETF${split ? '（左）' : ''}
+    </span>
+    <span class="legend__item">
+      <i class="legend__swatch legend__swatch--fund"></i>基金${split ? '（右）' : ''}
+    </span>`;
+
+  const hint = $('chart-hint');
+  hint.hidden = !split;
+  hint.textContent = split ? '兩根一組，比的是各自每個月領多少，不是加起來。' : '';
+}
+
+/** 分開看：一個月兩根，只標最高的那一根 —— 24 根都標會擠成一團 */
+function renderGroupedChart(stats, currentMonth) {
+  const max = Math.max(...stats.months.map((m) => Math.max(m[ETF], m[FUND])), 1);
+  const peakMonth = stats.months.findIndex((m) => Math.max(m[ETF], m[FUND]) === max);
+
+  $('chart-split').innerHTML = stats.months.map((m, i) => {
+    const bar = (value, cls) => (value > 0
+      ? `<div class="gcol__bar gcol__bar--${cls}" style="height:${Math.max(3, (value / max) * 100)}%"></div>`
+      : `<div class="gcol__bar gcol__bar--${cls} gcol__bar--zero"></div>`);
+
+    return `
+      <div class="gcol ${i + 1 === currentMonth ? 'is-current' : ''}">
+        <span class="gcol__peak">${i === peakMonth ? fmtShort(max) : ''}</span>
+        <div class="gcol__plot">${bar(m[ETF], 'etf')}${bar(m[FUND], 'fund')}</div>
+        <span class="gcol__label">${MONTH_LABELS[i]}</span>
+      </div>`;
+  }).join('');
+}
+
+function renderStackedChart(stats, currentMonth) {
+  const max = Math.max(...stats.months.map((m) => m.total), 1);
 
   $('chart').innerHTML = stats.months.map((m, i) => {
     const height = m.total ? Math.max(4, (m.total / max) * 100) : 0;
@@ -1354,6 +1913,153 @@ function renderClosed(rounds) {
         <div class="closed__meta">${escapeHtml(meta)}</div>
       </div>`;
   }).join('');
+}
+
+/* ---------- 明細頁 ---------- */
+
+function saveLedger() {
+  try { localStorage.setItem(LS.ledger, JSON.stringify(state.ledger)); } catch (err) { /* 無妨 */ }
+}
+
+function renderLedger() {
+  const L = state.ledger;
+  const { from, to } = ledgerRange();
+  const span = monthSpan(from, to);
+
+  for (const btn of document.querySelectorAll('#ledger-range .yearbar__btn')) {
+    btn.classList.toggle('is-active', btn.dataset.range === L.range);
+  }
+  for (const chip of document.querySelectorAll('#ledger-kinds .chip')) {
+    chip.classList.toggle('is-active', L.kinds.includes(chip.dataset.kind));
+  }
+  for (const chip of document.querySelectorAll('#ledger-styles .chip')) {
+    chip.classList.toggle('is-active', L.styles.includes(chip.dataset.style));
+  }
+  for (const btn of document.querySelectorAll('#ledger-mode .seg__btn')) {
+    btn.classList.toggle('is-active', (btn.dataset.mode === 'split') === L.split);
+  }
+
+  $('ledger-range-text').innerHTML =
+    `${fmtMonth(from)} <small>～</small> ${fmtMonth(to)} <small>共 ${span} 個月</small>`;
+
+  $('ledger-custom').hidden = L.range !== 'custom';
+  if (L.range === 'custom') fillMonthSelects(from, to);
+
+  // 型態只作用在買賣上。只看配息時整排變灰，留在原地才知道它還在、只是這時不管用
+  const tradeOn = L.kinds.includes('buy') || L.kinds.includes('sell');
+  $('ledger-style-row').classList.toggle('is-off', !tradeOn);
+
+  const { entries, untagged } = ledgerEntries();
+
+  let note = '';
+  if (!tradeOn) note = '配息一律全收，不分型態 —— ETF 的配息本來就不分，集保帳戶只有一個。';
+  else if (!L.styles.length) note = '型態一個都沒勾，買進和賣出都不會出現。';
+  else if (untagged) note = `另有 ${untagged} 筆沒記型態，這個篩選下不會出現。`;
+  $('ledger-filter-hint').hidden = !note;
+  $('ledger-filter-hint').textContent = note;
+
+  const hasAny = entries.length > 0;
+  $('ledger-tally-card').hidden = !hasAny;
+  $('ledger-list-card').hidden = !hasAny;
+  $('ledger-empty').hidden = hasAny;
+
+  if (!hasAny) {
+    $('ledger-empty-hint').textContent = L.kinds.length
+      ? '換個期間，或多勾幾種看看'
+      : '上面「看什麼」至少要勾一種';
+    return;
+  }
+
+  renderLedgerTally(ledgerTally(entries), span);
+
+  const shown = entries.slice(0, LEDGER_LIMIT);
+  $('ledger-list').innerHTML = shown.map(entryHtml).join('');
+  $('ledger-more').hidden = entries.length <= LEDGER_LIMIT;
+  $('ledger-more').textContent = entries.length > LEDGER_LIMIT
+    ? `共 ${entries.length} 筆，先列出最近 ${LEDGER_LIMIT} 筆。`
+    : '';
+
+  // 不含手續費時，這裡的淨額就對不上帳戶餘額了，差的正好是手續費
+  const fee = $('ledger-fee-hint');
+  fee.hidden = !state.excludeFee;
+  fee.textContent = state.excludeFee
+    ? '金額不含手續費（跟持股頁同一個開關），所以淨額會跟帳戶實際的變動差一點。'
+    : '';
+}
+
+/** 0 不加正負號 —— 「−$0」看起來像壞掉 */
+function signedMoney(value, isOut) {
+  const n = Math.round(Number(value) || 0);
+  if (!n) return '$0';
+  return (isOut ? '−' : '+') + fmtMoney(Math.abs(n));
+}
+
+function renderLedgerTally(box, span) {
+  const L = state.ledger;
+  const etf = box[ETF];
+  const fund = box[FUND];
+
+  // 沒勾的種類不要留一行 $0 佔位子
+  const rows = [];
+  if (L.kinds.includes('buy')) rows.push({ label: '買進', key: 'buy', count: 'buyN', out: true });
+  if (L.kinds.includes('sell')) rows.push({ label: '賣出', key: 'sell', count: 'sellN' });
+  if (L.kinds.includes('dividend')) rows.push({ label: '配息', key: 'dividend', count: 'divN' });
+
+  if (L.split) {
+    const cell = (value) => `
+      <span class="tally-cmp__v ${Math.round(value) > 0 ? 'is-in' : ''}">
+        ${fmtMoney(value, { sign: true })}
+      </span>`;
+
+    const line = (r) => `
+      <div class="tally-cmp">
+        <span class="tally-cmp__lbl">${r.label}</span>
+        <span class="tally-cmp__v ${r.out ? '' : 'is-in'}">${signedMoney(etf[r.key], r.out)}</span>
+        <span class="tally-cmp__v ${r.out ? '' : 'is-in'}">${signedMoney(fund[r.key], r.out)}</span>
+      </div>`;
+
+    $('ledger-tally').innerHTML = `
+      <div class="tally-head">
+        <span class="tally-head__lbl">這段期間</span>
+        <span class="tally-head__etf">ETF</span>
+        <span class="tally-head__fund">基金</span>
+      </div>
+      ${rows.map(line).join('')}
+      <div class="tally-cmp tally-cmp--sum">
+        <span class="tally-cmp__lbl">淨額</span>
+        ${cell(etf.net)}
+        ${cell(fund.net)}
+      </div>`;
+    return;
+  }
+
+  const all = {};
+  for (const key of ['buy', 'sell', 'dividend', 'buyN', 'sellN', 'divN', 'net']) {
+    all[key] = etf[key] + fund[key];
+  }
+
+  const line = (r) => `
+    <div class="tally__row">
+      <span>${r.label}<small>${all[r.count]} 筆</small></span>
+      <strong class="${r.out ? '' : 'is-in'}">${signedMoney(all[r.key], r.out)}</strong>
+    </div>`;
+
+  $('ledger-tally').innerHTML = `
+    ${rows.map(line).join('')}
+    <div class="tally__row tally__row--sum">
+      <span>${all.net >= 0 ? '淨流入' : '淨流出'}<small>平均每月 ${fmtMoney(all.net / span, { sign: true })}</small></span>
+      <strong class="${all.net > 0 ? 'is-in' : ''}">${fmtMoney(all.net, { sign: true })}</strong>
+    </div>`;
+}
+
+function fillMonthSelects(from, to) {
+  const months = monthList();
+  const options = (selected) => months
+    .map((m) => `<option value="${m}"${m === selected ? ' selected' : ''}>${fmtMonth(m)}</option>`)
+    .join('');
+
+  $('ledger-from').innerHTML = options(from);
+  $('ledger-to').innerHTML = options(to);
 }
 
 /* ---------- 設定頁 ---------- */
@@ -2034,7 +2740,7 @@ function submitTrade() {
    配息表單
    ========================================================================== */
 
-function openDividendSheet({ category, record = null }) {
+function openDividendSheet({ category, record = null, prefill = null }) {
   state.draft = { category };
   state.editing = record ? { entity: 'dividends', id: record.id } : null;
 
@@ -2042,11 +2748,12 @@ function openDividendSheet({ category, record = null }) {
   $('btn-dividend-delete').hidden = !record;
   showError('dividend-error', '');
 
-  fillInstrumentSelect('d-instrument', category, record ? record.instrumentId : '');
+  const preset = record || prefill || {};
+  fillInstrumentSelect('d-instrument', category, preset.instrumentId || '');
 
   // 基金的單筆與定期定額配息分開發，ETF 不分
   $('d-style-field').hidden = category !== FUND;
-  setChips('d-style-chips', 'dstyle', record ? normalizeStyle(record.style) : '小額');
+  setChips('d-style-chips', 'dstyle', preset.style ? normalizeStyle(preset.style) : '小額');
 
   if (record) {
     $('d-exdate').value = record.exDate || '';
@@ -2057,10 +2764,12 @@ function openDividendSheet({ category, record = null }) {
     $('d-note').value = record.note || '';
     $('d-units').dataset.auto = '0';
   } else {
-    $('d-exdate').value = '';
+    // 從漏記提醒點進來的話，除息日先填推算出來的那天，持有單位會跟著自動帶入
+    $('d-exdate').value = (prefill && prefill.exDate) || '';
     $('d-paydate').value = todayStr();
     for (const id of ['d-perunit', 'd-units', 'd-received', 'd-note']) $(id).value = '';
     $('d-units').dataset.auto = '1';
+    if (prefill && prefill.exDate) autofillUnits();
   }
 
   updateDividendHints();
@@ -2096,7 +2805,9 @@ function updateDividendHints() {
     freqHint.textContent = '';
   }
 
-  // 應發 vs 實領：差額就是被扣掉的稅費，讓使用者確認數字沒填錯
+  // 應發 vs 實領：差額就是被扣掉的費用，讓使用者確認數字沒填錯。
+  // 不叫「稅費」——實際上多半是每筆固定 10 元的跨行轉帳費，配息金額小的時候
+  // 它咬掉的比例很兇（應發 26 元被扣 10 元就是 36%）
   const perUnit = parseNum($('d-perunit').value);
   const units = parseNum($('d-units').value);
   const received = parseNum($('d-received').value);
@@ -2107,7 +2818,7 @@ function updateDividendHints() {
     let text;
     if (isUsd(inst)) {
       // 美元計價的每單位配息是美元，實領是換匯後的台幣。
-      // 配息當天的匯率跟現在不一樣，硬要相減只會得到假的「稅費」，所以只做粗估
+      // 配息當天的匯率跟現在不一樣，硬要相減只會得到假的「扣費」，所以只做粗估
       const rate = rateOf(inst.id);
       text = rate > 0
         ? `應發約 ${fmtNum(gross, 2)} 美元（依目前匯率約 ${fmtMoney(gross * rate)}）`
@@ -2115,7 +2826,7 @@ function updateDividendHints() {
     } else {
       const diff = gross - received;
       if (!received) text = `應發約 ${fmtMoney(gross)}`;
-      else if (diff > 0.5) text = `應發 ${fmtMoney(gross)}，被扣 ${fmtMoney(diff)}（稅費）`;
+      else if (diff > 0.5) text = `應發 ${fmtMoney(gross)}，被扣 ${fmtMoney(diff)}`;
       // 實領比應發多，通常是哪個數字填錯了 —— 講出來讓人回頭看一眼
       else if (diff < -0.5) text = `應發 ${fmtMoney(gross)}，實領多了 ${fmtMoney(-diff)}，確認一下`;
       else text = `應發 ${fmtMoney(gross)}，全額入帳`;
@@ -2688,11 +3399,36 @@ function bindEvents() {
     if (btn) editEntry(btn.dataset.entity, btn.dataset.id);
   });
 
+  // 漏記提醒：點一下直接開配息表單，標的、型態、除息日都先填好
+  $('missing-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.alert__item');
+    if (!btn) return;
+    const inst = instrumentById(btn.dataset.missingId);
+    if (!inst) return;
+
+    openDividendSheet({
+      category: inst.type,
+      prefill: {
+        instrumentId: inst.id,
+        style: btn.dataset.missingStyle,
+        exDate: btn.dataset.missingDate,
+      },
+    });
+  });
+
   // ---- 報表頁 ----
   $('year-bar').addEventListener('click', (e) => {
     const btn = e.target.closest('.yearbar__btn');
     if (!btn) return;
     state.reportYear = Number(btn.dataset.year);
+    renderReport();
+  });
+
+  $('report-mode').addEventListener('click', (e) => {
+    const btn = e.target.closest('.seg__btn');
+    if (!btn) return;
+    state.reportSplit = btn.dataset.mode === 'split';
+    try { localStorage.setItem(LS.reportSplit, state.reportSplit ? '1' : '0'); } catch (err) { /* 無妨 */ }
     renderReport();
   });
 
@@ -2707,11 +3443,14 @@ function bindEvents() {
     renderHoldings();
   });
 
-  $('exclude-fee').addEventListener('change', (e) => {
-    state.excludeFee = e.target.checked;
-    try { localStorage.setItem(LS.excludeFee, state.excludeFee ? '1' : '0'); } catch (err) { /* 無妨 */ }
-    render();   // 報表頁的累計投入成本也吃同一個基準
-  });
+  // 持股頁和報表頁各有一顆，但背後是同一個開關，切哪一顆兩邊都跟著變
+  for (const id of ['exclude-fee', 'rp-exclude-fee']) {
+    $(id).addEventListener('change', (e) => {
+      state.excludeFee = e.target.checked;
+      try { localStorage.setItem(LS.excludeFee, state.excludeFee ? '1' : '0'); } catch (err) { /* 無妨 */ }
+      render();
+    });
+  }
 
   // 點卡片展開／收合；展開後的「所有紀錄」才進明細面板
   for (const id of ['holdings-list', 'closed-list']) {
@@ -2727,6 +3466,63 @@ function bindEvents() {
       renderHoldings();
     });
   }
+
+  // ---- 明細頁 ----
+  $('ledger-range').addEventListener('click', (e) => {
+    const btn = e.target.closest('.yearbar__btn');
+    if (!btn) return;
+    const L = state.ledger;
+
+    // 第一次切到自訂，就從目前這段期間接手，不要跳回一段完全不同的範圍
+    if (btn.dataset.range === 'custom' && (!L.from || !L.to)) {
+      const current = ledgerRange();
+      L.from = current.from;
+      L.to = current.to;
+    }
+    L.range = btn.dataset.range;
+    saveLedger();
+    renderLedger();
+  });
+
+  for (const [id, key, attr] of [
+    ['ledger-kinds', 'kinds', 'kind'],
+    ['ledger-styles', 'styles', 'style'],
+  ]) {
+    $(id).addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (!chip) return;
+
+      const list = state.ledger[key];
+      const at = list.indexOf(chip.dataset[attr]);
+      if (at >= 0) list.splice(at, 1);
+      else list.push(chip.dataset[attr]);
+
+      saveLedger();
+      renderLedger();
+    });
+  }
+
+  $('ledger-mode').addEventListener('click', (e) => {
+    const btn = e.target.closest('.seg__btn');
+    if (!btn) return;
+    state.ledger.split = btn.dataset.mode === 'split';
+    saveLedger();
+    renderLedger();
+  });
+
+  for (const id of ['ledger-from', 'ledger-to']) {
+    $(id).addEventListener('change', () => {
+      state.ledger.from = $('ledger-from').value;
+      state.ledger.to = $('ledger-to').value;
+      saveLedger();
+      renderLedger();
+    });
+  }
+
+  $('ledger-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('.entry');
+    if (btn) editEntry(btn.dataset.entity, btn.dataset.id);
+  });
 
   // ---- 標的明細 ----
   $('detail-filter').addEventListener('click', (e) => {
@@ -2781,8 +3577,11 @@ function bindEvents() {
     if (e.key === 'Escape' && openSheetId) closeSheet();
   });
 
-  // 選項按鈕：點了就切換選中狀態
-  for (const group of document.querySelectorAll('.chips')) {
+  // 選項按鈕：點了就切換選中狀態。
+  // 這裡是**單選**——同組只留一顆亮著，表單裡的型態、單位、主題都是這樣。
+  // 明細頁的篩選是多選，各自管自己的亮燈，所以標了 chips--multi 讓這裡放行；
+  // 沒放行的話，它會在多選那邊的處理器跑完之後把亮燈改回單選。
+  for (const group of document.querySelectorAll('.chips:not(.chips--multi)')) {
     group.addEventListener('click', (e) => {
       const chip = e.target.closest('.chip');
       if (!chip || !group.contains(chip)) return;

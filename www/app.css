@@ -127,7 +127,7 @@ button, input, select, textarea {
 /* 數字一律等寬對齊，金額上下排在一起才不會跳動 */
 .num, .summary__value, .summary__sub, .stat__value, .entry__amount,
 .hold__num, .totals__row strong, .kv strong, .split__item strong,
-.chart__value {
+.chart__value, .cmp__row, .gcol__peak, .range, .tally__row, .tally-cmp {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
@@ -277,6 +277,78 @@ button, input, select, textarea {
   display: block;
   font-size: 19px;
   font-weight: 700;
+}
+
+/* ==========================================================================
+   漏記提醒
+
+   語氣要像便利貼，不要像錯誤訊息——它只是照配息頻率「猜」那期該有，
+   猜錯的代價只是你多看一眼。用琥珀金的淺色底，不用紅色。
+   ========================================================================== */
+
+.alert {
+  margin-bottom: 16px;
+  padding: 13px 15px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+  border-radius: var(--radius);
+  background: var(--accent-weak);
+}
+
+.alert__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: var(--warn);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.alert__list { display: grid; gap: 7px; }
+
+.alert__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+.alert__item:active { background: var(--surface-2); }
+
+.alert__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.alert__name {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.alert__meta {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.alert__go {
+  flex: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-deep);
+}
+
+.alert__foot {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 /* ==========================================================================
@@ -478,6 +550,16 @@ button, input, select, textarea {
   font-weight: 700;
 }
 
+/* 卡片標題跟它的切換擺同一排，切換靠右、寬度只有內容那麼寬 */
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.card__head .card__title { margin: 0; }
+
 .card__sub {
   margin: 0 0 12px;
   font-size: 12.5px;
@@ -567,6 +649,247 @@ button, input, select, textarea {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
+}
+
+/* 年份會橫向捲動，切換釘在右邊不跟著跑 */
+.reportbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.reportbar .yearbar { flex: 1; min-width: 0; margin-bottom: 0; }
+.reportbar .seg { flex: none; }
+
+.seg {
+  display: flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.seg__btn {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.seg__btn.is-active {
+  background: var(--surface-1);
+  color: var(--text-primary);
+  box-shadow: var(--shadow);
+}
+.seg__btn:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 1px; }
+
+/* ---------- ETF／基金 兩欄對比 ---------- */
+
+.cmp { display: flex; gap: 8px; }
+
+.cmp__col {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 11px 11px;
+  border-radius: var(--radius-sm);
+}
+.cmp__col--etf  { background: var(--etf-weak); }
+.cmp__col--fund { background: var(--fund-weak); }
+
+.cmp__name {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.cmp__col--etf  .cmp__name { color: var(--etf-ink); }
+.cmp__col--fund .cmp__name { color: var(--fund-ink); }
+
+.cmp__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.cmp__row + .cmp__row { margin-top: 3px; }
+.cmp__row strong { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.cmp__row--lead strong { font-size: 19px; }
+.cmp__row--sub,
+.cmp__row--sub strong { font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.cmp__row strong.is-gain { color: var(--gain); }
+.cmp__row strong.is-loss { color: var(--loss); }
+
+.cmp__rule { height: 1px; margin: 8px 0; background: var(--border); }
+
+/* ---------- 雙柱：一個月兩根，左 ETF、右基金 ----------
+   藍與紫在色盲模擬下幾乎同色（ΔE 2），所以辨識靠的是固定的左右位置，
+   顏色只是輔助。圖例也要寫出「左」「右」。 */
+
+.gchart {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 132px;
+  margin-top: 10px;
+}
+
+.gcol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 只有最高的那個月有字，其餘是空的 —— 固定高度，柱子才會站在同一條線上 */
+.gcol__peak {
+  height: 14px;
+  line-height: 14px;
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.gcol__plot {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;          /* 兩根之間留一道縫，不然兩色會糊成一塊 */
+}
+
+.gcol__bar {
+  width: 7px;
+  border-radius: 3px 3px 0 0;
+}
+.gcol__bar--etf  { background: var(--etf); }
+.gcol__bar--fund { background: var(--fund); }
+
+/* 那個月是零：留一條細線，才分得出「沒有」和「還沒到」 */
+.gcol__bar--zero {
+  height: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+.gcol__label {
+  padding-top: 5px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+.gcol.is-current .gcol__label { color: var(--accent-deep); font-weight: 700; }
+
+/* ==========================================================================
+   明細頁 —— 期間、篩選、小計
+   ========================================================================== */
+
+/* 明細頁的期間列有五顆，比年份列擠，縮一點才不會把「自訂」推出畫面外 */
+.yearbar--tight { gap: 6px; }
+.yearbar--tight .yearbar__btn { padding: 6px 11px; font-size: 13px; }
+
+.range {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.range small { font-size: 12px; font-weight: 600; color: var(--muted); }
+
+.range-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.range-pick .input { flex: 1; min-width: 0; }
+.range-pick__sep { flex: none; color: var(--muted); }
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 11px;
+}
+.filter-row__label {
+  flex: none;
+  width: 44px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.filter-row .chips { flex: 1; min-width: 0; }
+.filter-row .chip { padding: 7px 12px; font-size: 13px; }
+
+/* 只看配息時型態用不上：變灰但留在原地，才看得出它還在、只是這時不管用 */
+.filter-row.is-off { opacity: .38; pointer-events: none; }
+
+.tally__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 14px;
+}
+.tally__row + .tally__row { border-top: 1px solid var(--border); }
+.tally__row > span { color: var(--text-secondary); }
+.tally__row small { margin-left: 5px; font-size: 12px; color: var(--muted); }
+.tally__row strong { font-size: 15px; font-weight: 700; color: var(--text-secondary); }
+.tally__row strong.is-in { color: var(--gain); }
+
+.tally__row--sum { border-top: 1.5px solid var(--text-primary); }
+.tally__row--sum strong { font-size: 17px; color: var(--text-primary); }
+.tally__row--sum strong.is-in { color: var(--gain); }
+
+/* 分開看：標籤 ＋ ETF ＋ 基金 三欄 */
+.tally-head {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.tally-head__lbl { flex: 1.15; color: var(--muted); font-weight: 600; }
+.tally-head__etf,
+.tally-head__fund { flex: 1; text-align: right; }
+.tally-head__etf  { color: var(--etf-ink); }
+.tally-head__fund { color: var(--fund-ink); }
+
+.tally-cmp {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 13.5px;
+}
+.tally-cmp + .tally-cmp { border-top: 1px solid var(--border); }
+.tally-cmp__lbl { flex: 1.15; color: var(--text-secondary); }
+.tally-cmp__v {
+  flex: 1;
+  text-align: right;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.tally-cmp__v.is-in { color: var(--gain); }
+.tally-cmp--sum { border-top: 1.5px solid var(--text-primary); }
+.tally-cmp--sum .tally-cmp__lbl { color: var(--text-primary); font-weight: 700; }
+.tally-cmp--sum .tally-cmp__v { color: var(--text-primary); }
+.tally-cmp--sum .tally-cmp__v.is-in { color: var(--gain); }
+
+.ledger-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 11px;
 }
 
 .chart {
