@@ -15,10 +15,15 @@
 <link rel="stylesheet" href="app.css">
 <script>
 /* 主題要在畫面畫出來之前就決定好，否則會先閃一下淺色再變深色。
-   預設淺色；選了「跟隨系統」才去問系統偏好。 */
+   預設淺色；選了「跟隨系統」才去問系統偏好。
+   霧霾和森林是自己一種底（照片），不跟著系統的明暗走。 */
 (function () {
   try {
     var pref = localStorage.getItem('pb.theme') || 'light';
+    if (pref === 'haze' || pref === 'forest') {
+      document.documentElement.dataset.theme = pref;
+      return;
+    }
     var dark = pref === 'dark' || (pref === 'auto' &&
       window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -412,11 +417,13 @@
 
       <div class="card">
         <h2 class="card__title">外觀</h2>
-        <p class="card__sub">預設是淺色，晚上想護眼再切深色</p>
+        <p class="card__sub">預設是淺色，晚上想護眼再切深色；霧霾與森林是照片打底的玻璃版</p>
         <div class="chips" id="theme-chips">
           <button class="chip" type="button" data-theme-pref="light">淺色</button>
           <button class="chip" type="button" data-theme-pref="dark">深色</button>
           <button class="chip" type="button" data-theme-pref="auto">跟隨系統</button>
+          <button class="chip" type="button" data-theme-pref="haze">霧霾</button>
+          <button class="chip" type="button" data-theme-pref="forest">森林</button>
         </div>
       </div>
 

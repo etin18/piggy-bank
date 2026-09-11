@@ -230,6 +230,9 @@ const EXPECT = {
   'ledger-fund-net': '−$8,776',
   'ledger-regular': '−$47,303',
   'ledger-all-buy': '−$207,224',
+
+  // 114,600 ÷ 239,369 ＝ 47.9%。四檔加起來要剛好 100%
+  'share-0056': '47.9',
 };
 
 /* ========================================================================== */
@@ -822,6 +825,51 @@ async function run() {
   const persisted = await page.evaluate(() => localStorage.getItem('pb.fields'));
   console.log(`  ${persisted && !persisted.includes('avg') ? '✅' : '❌'} 設定有存起來：${persisted}`);
   if (!persisted || persisted.includes('avg')) problems.push('顯示欄位設定沒有存到 localStorage');
+
+  /* 佔比預設關著。勾起來之後每張卡片多一項，而且全部加起來必須是 100%——
+     基金的單筆與定期定額要合併算（集中度看的是押了多少在這檔上），
+     沒填現價的那幾檔總計是拿成本當市值，這裡得用同一套規則才加得起來 */
+  // 「從明細刪除」那段刪掉了一筆 0056，清回原始資料，佔比才有固定的基準
+  await page.evaluate((seed) => {
+    for (const [entity, rows] of Object.entries(seed)) {
+      localStorage.setItem('pb.' + entity, JSON.stringify(rows.map((r) => ({ ...r, _synced: true }))));
+    }
+  }, SEED);
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(300);
+  await page.locator('.tab[data-page="holdings"]').click();
+  await page.waitForTimeout(300);
+
+  await page.locator('#btn-fields').click();
+  await page.waitForTimeout(400);
+  await page.locator('#field-toggles label:has(input[data-field="share"])').click();
+  await page.waitForTimeout(300);
+  await page.locator('#fields-sheet [data-close]').click();
+  await page.waitForTimeout(400);
+  await expandAll();
+  await shot(page, '09f-持股佔比');
+
+  const shares = await page.evaluate(() => [...document.querySelectorAll('.hold__facts')]
+    .map((el) => {
+      const m = el.textContent.match(/佔比\s*([\d.]+)%/);
+      return m ? Number(m[1]) : null;
+    })
+    .filter((v) => v !== null));
+
+  const sum = shares.reduce((a, b) => a + b, 0);
+  const okSum = shares.length === 4 && Math.abs(sum - 100) <= 0.2;   // 各自四捨五入會有一點誤差
+  console.log(`  ${okSum ? '✅' : '❌'} ${shares.length} 檔的佔比加起來 ${sum.toFixed(1)}%`);
+  if (!okSum) problems.push(`佔比：${shares.length} 檔加起來 ${sum.toFixed(1)}%，應為 4 檔共 100%`);
+
+  const etfShare = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.hold')]
+      .find((el) => el.textContent.includes('元大高股息'));
+    const m = card && card.textContent.match(/佔比\s*([\d.]+)%/);
+    return m ? m[1] : null;
+  });
+  const okEtf = etfShare === EXPECT['share-0056'];
+  console.log(`  ${okEtf ? '✅' : '❌'} 0056 佔比 ${etfShare}%（114,600 ÷ 239,369）`);
+  if (!okEtf) problems.push(`0056 佔比得到 ${etfShare}%，應為 ${EXPECT['share-0056']}%`);
 
   console.log('\n── 更新現價 ──');
   await page.locator('.hold__price-btn').first().click();

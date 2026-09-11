@@ -95,6 +95,214 @@
   --warn:     #d9a750;
 }
 
+/* ==========================================================================
+   照片主題（霧霾、森林）
+
+   跟淺色／深色不一樣的地方是「底是一張照片」，所以規則整套不同：
+   - 文字一律白色系。深色字壓在會變動的照片上讀不了
+   - 卡片底色要淡，厚度是靠邊緣的高光做出來的，不是靠面板
+   - 換底圖就要重量一次對比（見開發筆記第八節）
+
+   兩個主題共用同一份元件樣式（在檔案最後面那一大段），
+   差別全部收在下面這組變數裡。要加第三張照片，複製一組填值就好。
+
+     --photo        底圖
+     --photo-dim    壓暗層。照片越亮要壓越多，白字才讀得到
+     --glass        面板底色。濃了就從玻璃變成毛玻璃
+     --glass-face   面板上那層漸層。有＝表面鼓起來（水感），none＝平的（果凍）
+     --glass-line   外框那一圈
+     --glass-filter backdrop-filter。blur 小＝看得到後面（水感），大＝糊（霧面）
+     --glass-shadow 整組陰影。水感是四層 inset＋外發光，果凍只有兩層 ──
+                    這是兩種玻璃最大的差別，不要硬套成同一組
+     --glass-rim    上緣高光顏色（分頁列與表單面板也用）
+     --glass-drop   投影（分頁列也用）
+     --summary-shadow 摘要卡的陰影
+     --glass-bar    頂欄與分頁列的底色，要比卡片濃
+     --bar-filter   頂欄與分頁列的 backdrop-filter
+     --sheet-bg     表單面板：唯一不通透的地方
+     --accent-line / --accent-glow  選中狀態的邊框與發光
+     --summary-bg / --summary-line / --summary-ink / --summary-shadow
+                    配息摘要卡。它是記錄頁唯一有自己顏色的卡片
+   ========================================================================== */
+
+/* 霧霾：水感玻璃。blur 只有 2px，看得到後面的霧和山 */
+:root[data-theme="haze"] {
+  color-scheme: dark;
+
+  /* 輸入框那種需要實色的地方會用到，不是頁面底色 —— 頁面底是照片 */
+  --page:           #16241c;
+  --surface-1:      rgba(255,255,255,.10);
+  --surface-2:      rgba(255,255,255,.12);
+  --text-primary:   #ffffff;
+  --text-secondary: #e2ebe4;
+  --muted:          #cfdcd4;
+  --border:         rgba(255,255,255,.30);
+  --shadow:         0 14px 34px rgba(0,0,0,.42);
+  --shadow-lift:    0 18px 46px rgba(0,0,0,.52);
+
+  /* 強調色（選中、主要動作）走靛藍。
+     不能用跟 ETF 一樣的天藍 —— 那是分類標記，撞在一起會分不出
+     「這顆被按下」和「這是 ETF」。靛藍跟 ETF 的 #9fd0ef 差 31.8 */
+  --accent:      #9ac6ff;
+  --on-accent:   #2d3a4b;
+  --accent-deep: #a8cfff;
+  --accent-weak: rgba(154,198,255,.22);
+  --accent-line: rgba(205,228,255,.85);
+  --accent-glow: rgba(154,198,255,.45);
+
+  /* 霧霾用藍 × 綠。紫換成綠之後色盲下也分得開（綠色盲 59，原本的藍紫只有 1.2）。
+     基金的 ink 取 #b0dd9c，跟 --loss 的青綠差 18.7 —— 不會讀成「賠錢」 */
+  --etf:      #9fd0ef;
+  --etf-ink:  #bfe2f8;
+  --etf-weak: rgba(159,208,239,.20);
+  --fund:     #8ecf7a;
+  --fund-ink: #b0dd9c;
+  --fund-weak:rgba(142,207,122,.20);
+
+  /* 霧霾不用台股的紅漲綠跌，改成金黃（賺）× 天藍（賠）。
+     紅配綠在色盲下只差 19.9／17.0，黃配藍是 76.7／89.5 —— 這組穩得多。
+     其他主題維持紅綠，所以**同一個 App 裡「賺」的顏色會因主題而異**。 */
+  --gain:     #f0c864;
+  --gain-weak:rgba(240,200,100,.20);
+  --loss:     #60c0e3;
+  --loss-weak:rgba(96,192,227,.20);
+
+  --danger:   #ff9384;
+  --good:     #79e0aa;
+  /* 提醒色要讓位：原本的 #ffd464 跟賺錢的金黃只差 6.9，
+     記錄頁上「有 N 期沒記」會跟賺錢金額同色。改成琥珀橘，差 20.2 */
+  --warn:     #f2a65a;
+
+  --photo:        url("bg-haze.webp");
+  --photo-dim:    linear-gradient(180deg, rgba(10,22,16,.38) 0%, rgba(8,18,13,.48) 100%);
+  /* 玻璃帶一點暗色，不是純白的半透明。
+     白玻璃疊在亮霧上會越疊越亮 —— 明細頁的 entry 包在 card 裡是兩層，
+     灰字掉到 2.7 幾乎看不見。而且**把白色加濃只會更糟**（實測 2.7 → 2.1），
+     要救得讓底變暗。.20 比森林的 .34 淡，通透感還在。 */
+  --glass:        rgba(16,28,22,.20);
+  --glass-face:
+    linear-gradient(180deg,
+      rgba(255,255,255,.22) 0%,
+      rgba(255,255,255,.06) 34%,
+      rgba(255,255,255,.02) 62%,
+      rgba(255,255,255,.10) 100%);
+  /* 白框要克制。一頁十幾張卡片各鑲一圈亮白邊，會比裡面的字還搶眼 ——
+     厚度感看得出來就夠，不需要每一條都拉滿 */
+  --glass-line:   rgba(255,255,255,.28);
+  --glass-filter: blur(2px) saturate(165%);
+  --glass-rim:    rgba(255,255,255,.55);
+  --glass-drop:   0 14px 34px rgba(0,0,0,.42);
+  /* 四層 inset 疊出玻璃管的厚度，再加外發光把元件從照片上浮起來 */
+  --glass-shadow:
+    inset 0  1px  1px rgba(255,255,255,.55),
+    inset 0 -1px  2px rgba(255,255,255,.26),
+    inset 0  0    0 1px rgba(255,255,255,.07),
+    inset 0 16px 28px -20px rgba(255,255,255,.40),
+    0 0 20px rgba(255,255,255,.14),
+    0 14px 34px rgba(0,0,0,.42);
+  --summary-shadow:
+    inset 0  1px  1px rgba(255,255,255,.55),
+    inset 0 -1px  2px rgba(210,240,225,.26),
+    inset 0 16px 28px -20px rgba(255,255,255,.40),
+    0 0 22px rgba(70,140,105,.20),
+    0 14px 34px rgba(0,0,0,.42);
+  --glass-bar:    rgba(16,28,21,.88);
+  --bar-filter:   blur(16px) saturate(165%);
+  --sheet-bg:     linear-gradient(180deg, rgba(30,46,36,.94) 0%, rgba(20,32,25,.96) 100%);
+  /* 摘要卡走墨綠，跟霧景同一個色溫。
+     它仍然是記錄頁唯一有顏色的卡片，只是不再用金色搶 */
+  --summary-bg:
+    linear-gradient(180deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.03) 42%, rgba(255,255,255,.06) 100%),
+    linear-gradient(135deg, rgba(117,203,120,.58) 0%, rgba(110,148,90,.40) 100%);
+  --summary-line: rgba(150,205,180,.42);
+  --summary-ink:  #f2f8f5;
+
+  /* 比淺色主題的 18/12 大一點點就好 —— 玻璃需要一點圓潤，
+     但 28px 會讓持股那種一行高的列變成藥丸 */
+  --radius:    20px;
+  --radius-sm: 14px;
+}
+
+/* 森林：果凍玻璃。跟霧霾相反 —— blur 給重（18px），靠墨綠色的面板本身撐對比。
+   底圖是整片向日葵，細節多又亮，2px 的水感玻璃壓不住，字會糊在花上面。 */
+:root[data-theme="forest"] {
+  color-scheme: dark;
+
+  --page:           #1a2a22;
+  --surface-1:      rgba(255,255,255,.12);
+  --surface-2:      rgba(255,255,255,.14);
+  --text-primary:   #f2f6f2;
+  --text-secondary: #d2ded5;
+  --muted:          #bdc9c0;
+  --border:         rgba(255,255,255,.26);
+  --shadow:         0 10px 30px rgba(0,0,0,.32);
+  --shadow-lift:    0 16px 40px rgba(0,0,0,.44);
+
+  --accent:      #f5cd6a;
+  --on-accent:   #2a1f06;
+  --accent-deep: #f7d585;
+  --accent-weak: rgba(245,205,106,.22);
+  --accent-line: rgba(255,236,190,.90);
+  --accent-glow: rgba(255,217,122,.45);
+
+  /* 森林用黃×綠，不跟其他主題的藍×紫一樣。
+
+     藍紫那組在綠色盲下 ΔE 只有 1.2（等於同一個顏色），靠圖例的「左／右」硬撐；
+     黃綠反而好得多 —— 明度差夠大，protan 41、deutan 55。
+
+     兩個要閃開的顏色：
+       ink 的綠偏黃綠，跟 --loss 的青綠差 16.7，不會讀成「賠錢」
+       ETF 的黃跟 --accent 的金差 17.2，不會讀成「選中」 */
+  --etf:      #ffd84d;
+  --etf-ink:  #ffe894;
+  --etf-weak: rgba(255,216,77,.20);
+  --fund:     #5fb877;
+  --fund-ink: #9ad98a;
+  --fund-weak:rgba(95,184,119,.22);
+
+  --gain:     #ff8a7a;
+  --gain-weak:rgba(255,138,122,.20);
+  --loss:     #6ddba0;
+  --loss-weak:rgba(109,219,160,.20);
+
+  --danger:   #ff8a7a;
+  --good:     #6ddba0;
+  --warn:     #f5cd6a;
+
+  --photo:        url("bg-forest.jpg");
+  /* 向日葵那張下半部是整片亮黃綠，白字壓在上面會吃虧，
+     所以還是要一層淡壓暗 —— 比霧霾輕（.18/.28 對 .38/.48），果凍的通透感才留得住 */
+  --photo-dim:    linear-gradient(180deg, rgba(10,20,14,.18) 0%, rgba(8,16,12,.30) 100%);
+  --glass:        rgba(28,42,34,.34);
+  /* 平的。加了漸層就會變成「上亮下暗」的鼓起感，那是水感的長相，
+     果凍靠的是一整片均勻的墨綠 */
+  --glass-face:   none;
+  --glass-line:   rgba(255,255,255,.28);
+  --glass-filter: blur(18px) saturate(175%) brightness(.98);
+  --glass-rim:    rgba(255,255,255,.42);
+  --glass-drop:   0 10px 30px rgba(0,0,0,.32);
+  /* 只有兩層：一道細的上緣高光，一道從下緣往上收的光。
+     不要內圈線、不要外發光 —— 那些一加就跟霧霾撞臉 */
+  --glass-shadow:
+    inset 0  1px  0 rgba(255,255,255,.42),
+    inset 0 -14px 22px -16px rgba(255,255,255,.20),
+    0 10px 30px rgba(0,0,0,.32);
+  --summary-shadow:
+    inset 0  1px  0 rgba(255,255,255,.42),
+    inset 0 -14px 22px -16px rgba(255,255,255,.20),
+    0 10px 30px rgba(0,0,0,.32);
+  --glass-bar:    rgba(22,34,27,.82);
+  --bar-filter:   blur(32px) saturate(175%);
+  --sheet-bg:     linear-gradient(180deg, rgba(26,40,32,.95) 0%, rgba(18,30,24,.96) 100%);
+  --summary-bg:
+    linear-gradient(135deg, rgba(245,205,106,.40) 0%, rgba(245,205,106,.18) 100%);
+  --summary-line: rgba(255,225,160,.55);
+  --summary-ink:  #fffaf0;
+
+  --radius:    22px;
+  --radius-sm: 18px;
+}
+
 * { box-sizing: border-box; }
 
 /* .sheet、.chips、.field 這些都自帶 display，優先度高過瀏覽器預設的 [hidden]。
@@ -1976,3 +2184,204 @@ select.input {
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ==========================================================================
+   照片主題的元件（霧霾＋森林共用）
+
+   變數在檔案最上面，每個主題各填一組。這裡只定義「結構」：
+
+   玻璃的厚度是四層 shadow 疊出來的 ——
+     上緣高光 ＋ 下緣高光 ＋ 內圈線 ＋ 表面那道凸起的光
+   再加外發光與投影把元件從照片上浮起來。
+   水感（霧霾）與果凍（森林）的差別只是這些值的強弱，不是兩套做法。
+
+   效能：backdrop-filter 在手機上不便宜，這裡連列表每一列都有。
+   真的滑起來會掉幀的話，第一個該拿掉的是 .entry 的 backdrop-filter
+   （霧霾的 blur 只有 2px，拿掉幾乎看不出差別，但少了幾十個合成層）。
+   ========================================================================== */
+
+:is([data-theme="haze"], [data-theme="forest"]) body { background: transparent; }
+
+:is([data-theme="haze"], [data-theme="forest"]) body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background-image: var(--photo);
+  background-size: cover;
+  background-position: center center;
+}
+
+/* 壓暗層。照片越亮要壓越多，不然白字會糊在上面 */
+:is([data-theme="haze"], [data-theme="forest"]) body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--photo-dim);
+}
+
+/* 所有會浮起來的東西都是同一塊玻璃 */
+:is([data-theme="haze"], [data-theme="forest"]) .card,
+:is([data-theme="haze"], [data-theme="forest"]) .entry,
+:is([data-theme="haze"], [data-theme="forest"]) .action,
+:is([data-theme="haze"], [data-theme="forest"]) .picker__btn,
+:is([data-theme="haze"], [data-theme="forest"]) .alert,
+:is([data-theme="haze"], [data-theme="forest"]) .alert__item,
+:is([data-theme="haze"], [data-theme="forest"]) .hold,
+:is([data-theme="haze"], [data-theme="forest"]) .sync-chip,
+:is([data-theme="haze"], [data-theme="forest"]) .more,
+:is([data-theme="haze"], [data-theme="forest"]) .totals,
+:is([data-theme="haze"], [data-theme="forest"]) .yearbar__btn,
+:is([data-theme="haze"], [data-theme="forest"]) .icon-btn--tool,
+:is([data-theme="haze"], [data-theme="forest"]) .btn {
+  background-color: var(--glass);
+  background-image: var(--glass-face);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+  box-shadow: var(--glass-shadow);
+}
+
+/* 列表項目小一號，圓角跟著收 */
+:is([data-theme="haze"], [data-theme="forest"]) .entry,
+:is([data-theme="haze"], [data-theme="forest"]) .alert__item,
+:is([data-theme="haze"], [data-theme="forest"]) .hold {
+  border-radius: var(--radius-sm);
+}
+
+/* 小元件一律膠囊 */
+:is([data-theme="haze"], [data-theme="forest"]) .entry__tag,
+:is([data-theme="haze"], [data-theme="forest"]) .action__mark,
+:is([data-theme="haze"], [data-theme="forest"]) .sync-chip,
+:is([data-theme="haze"], [data-theme="forest"]) .chip,
+:is([data-theme="haze"], [data-theme="forest"]) .seg__btn,
+:is([data-theme="haze"], [data-theme="forest"]) .yearbar__btn {
+  border-radius: 999px;
+}
+
+/* 摘要卡：金色要留著（那是配息的識別），但字得轉白 ——
+   淺色主題那套深棕字壓在暗玻璃上等於消失 */
+:is([data-theme="haze"], [data-theme="forest"]) .summary {
+  background: var(--summary-bg);
+  border: 1px solid var(--summary-line);
+  border-radius: var(--radius);
+  color: var(--summary-ink);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+  box-shadow: var(--summary-shadow);
+}
+:is([data-theme="haze"], [data-theme="forest"]) .summary__label { opacity: .92; }
+
+/* 頂欄與分頁列：一樣是玻璃，但底下有整頁內容捲過去。
+   太透的話下面那行字會穿出來跟分頁標籤疊在一起，所以 tint 濃一階、blur 也重 */
+:is([data-theme="haze"], [data-theme="forest"]) .topbar,
+:is([data-theme="haze"], [data-theme="forest"]) .tabbar {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.04) 100%),
+    var(--glass-bar);
+  backdrop-filter: var(--bar-filter);
+  -webkit-backdrop-filter: var(--bar-filter);
+  border-color: var(--glass-line);
+}
+:is([data-theme="haze"], [data-theme="forest"]) .tabbar {
+  box-shadow: inset 0 1px 1px var(--glass-rim), var(--glass-drop);
+}
+
+/* 持股頁本來是透明列＋分隔線，在照片上會整片糊掉，改成一列一片玻璃。
+   但那一列的左右內距原本只有 2px —— 沒有框的時候內容對齊頁面邊界是對的，
+   一旦包進玻璃卡片，展開箭頭和金額就會貼在框上。 */
+:is([data-theme="haze"], [data-theme="forest"]) .hold { margin-bottom: 9px; }
+:is([data-theme="haze"], [data-theme="forest"]) .hold + .hold {
+  border-top: 1px solid var(--glass-line);
+}
+:is([data-theme="haze"], [data-theme="forest"]) .hold__row,
+:is([data-theme="haze"], [data-theme="forest"]) .hold__detail {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+/* 圓的東西要維持圓，不能被卡片圓角接管 */
+:is([data-theme="haze"], [data-theme="forest"]) .icon-btn--tool { border-radius: 50%; }
+
+/* 分隔線在玻璃上要淡，不然像刻痕 */
+:is([data-theme="haze"], [data-theme="forest"]) .card__rule,
+:is([data-theme="haze"], [data-theme="forest"]) .cmp__rule {
+  background: rgba(255,255,255,.14);
+}
+
+/* 表單面板是唯一不做通透的地方。
+   它蓋在整頁內容上面，玻璃會讓底下的清單直接穿上來跟欄位疊在一起，
+   填數字的時候根本看不清楚自己在填哪一格。
+   所以底色給到 .94 以上，只留邊緣的高光維持同一套語彙。 */
+:is([data-theme="haze"], [data-theme="forest"]) .sheet {
+  background: var(--sheet-bg);
+  border: 1px solid var(--glass-line);
+  border-bottom: 0;
+  border-radius: 22px 22px 0 0;   /* 底部貼齊螢幕，不要圓角 */
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow:
+    inset 0 1px 1px var(--glass-rim),
+    0 -12px 40px rgba(0,0,0,.5);
+}
+
+/* 表單：輸入框不能是玻璃 —— 要填字的地方得看得出邊界在哪 */
+:is([data-theme="haze"], [data-theme="forest"]) .input {
+  background: rgba(255,255,255,.10);
+  border-color: rgba(255,255,255,.32);
+  color: #fff;
+}
+:is([data-theme="haze"], [data-theme="forest"]) .input:focus {
+  background: rgba(255,255,255,.16);
+  border-color: var(--accent);
+}
+:is([data-theme="haze"], [data-theme="forest"]) .input::placeholder {
+  color: rgba(255,255,255,.45);
+}
+
+/* 篩選膠囊：沒選中的那些原本吃 --page 的實色，
+   在一片玻璃裡會變成突兀的色塊，所以也給玻璃 */
+:is([data-theme="haze"], [data-theme="forest"]) .chip {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.28);
+}
+:is([data-theme="haze"], [data-theme="forest"]) .seg { background: rgba(255,255,255,.10); }
+
+/* ── 亮起來的狀態 ──────────────────────────────────────────────────
+   上面那條玻璃規則把 .btn 和 .yearbar__btn 一起收編了，
+   結果「2026 被點下去」「儲存並測試」這些原本金色實心的東西
+   全變成跟旁邊一樣的玻璃，看不出被按下或選中。
+
+   在玻璃底上，**實心金色才是「這顆亮著」的訊號**——半透明一律讀成「沒選」。 */
+:is([data-theme="haze"], [data-theme="forest"]) .chip.is-active,
+:is([data-theme="haze"], [data-theme="forest"]) .yearbar__btn.is-active,
+:is([data-theme="haze"], [data-theme="forest"]) .btn--primary,
+:is([data-theme="haze"], [data-theme="forest"]) .btn--submit {
+  background: var(--accent);
+  border-color: var(--accent-line);
+  color: var(--on-accent);
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.55),
+    0 0 18px var(--accent-glow),
+    0 6px 18px rgba(0,0,0,.28);
+}
+
+/* 合計／分開看這種段落切換沒有金色，選中的那顆就靠「比容器亮」來分辨 */
+:is([data-theme="haze"], [data-theme="forest"]) .seg__btn.is-active {
+  background: rgba(255,255,255,.26);
+  color: #fff;
+  box-shadow: inset 0 1px 1px rgba(255,255,255,.50);
+}
+
+/* 刪除是危險動作，維持透明紅字，不要被玻璃收編 */
+:is([data-theme="haze"], [data-theme="forest"]) .btn--danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+  box-shadow: none;
+}
+
+/* 面板背後的遮罩要更暗，照片本來就亮 */
+:is([data-theme="haze"], [data-theme="forest"]) .scrim { background: rgba(4,12,8,.58); }

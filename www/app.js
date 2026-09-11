@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v21';
+const APP_VERSION = 'v22';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -48,6 +48,8 @@ const HOLDING_FIELDS = [
   { key: 'avg', label: '平均成本', hint: '每單位' },
   { key: 'price', label: '現價／淨值', hint: '' },
   { key: 'rate', label: '匯率', hint: '美元計價才有' },
+  // 集中度看的是「押了多少在這檔上」，所以基金的單筆與定期定額要合起來算
+  { key: 'share', label: '佔比', hint: '這檔占總市值多少' },
 ];
 
 const DEFAULT_FIELDS = ['avg', 'price', 'rate'];
@@ -1675,9 +1677,10 @@ function renderHoldings() {
     { type: FUND, rows: cards.filter((c) => c.type === FUND) },
   ].filter((g) => g.rows.length);
 
+  // 佔比的分母用上面那個總市值，每張卡片才加得起來剛好 100%
   $('holdings-list').innerHTML = groups.map((g) => `
     <p class="hold-group__title">${g.type}</p>
-    ${g.rows.map(holdingHtml).join('')}
+    ${g.rows.map((card) => holdingHtml(card, value)).join('')}
   `).join('');
 
   renderClosed(closed);
@@ -1703,7 +1706,7 @@ function plHtml(amount, base, { cls = 'hold__pl' } = {}) {
  * 不然像 0826 那種「價格在跌、配息補回來還有賺」的狀況，
  * 兩個顏色相反的數字並排會看不懂到底是賺是賠。
  */
-function holdingHtml(card) {
+function holdingHtml(card, totalValue = 0) {
   const inst = card.instrument;
   const isETF = card.type === ETF;
   const priceLabel = isETF ? '現價' : '淨值';
@@ -1794,6 +1797,11 @@ function holdingHtml(card) {
   }
   if (on('price')) facts.push(`${priceLabel} ${price > 0 ? fmtNum(price, 4) : '未填'}`);
   if (on('rate') && usd) facts.push(`匯率 ${rate > 0 ? fmtNum(rate, 4) : '未填'}`);
+  if (on('share') && totalValue > 0) {
+    // 沒填現價的那幾檔，總計是拿成本當市值的，這裡要用同一套規則才加得起來
+    const mine = lots.reduce((sum, p) => sum + (p.hasPrice ? p.value : p.cost), 0);
+    facts.push(`佔比 ${(mine / totalValue * 100).toFixed(1)}%`);
+  }
   if (facts.length) detail.push(`<p class="hold__facts">${escapeHtml(facts.join(' · '))}</p>`);
 
   if (split) detail.push(`<div class="lots">${lots.map((p) => lotHtml(p, hasPrice)).join('')}</div>`);
@@ -3331,6 +3339,13 @@ function exportDividends() {
    ========================================================================== */
 
 function applyTheme() {
+  // 照片主題是自己一種底，不跟著系統的明暗走
+  const PHOTO_THEMES = { haze: '#16241c', forest: '#1a2a22' };
+  if (PHOTO_THEMES[state.theme]) {
+    document.documentElement.dataset.theme = state.theme;
+    $('theme-color').setAttribute('content', PHOTO_THEMES[state.theme]);
+    return;
+  }
   const dark = state.theme === 'dark'
     || (state.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
