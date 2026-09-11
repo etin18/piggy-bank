@@ -4,3 +4,6 @@ node_modules/
 
 # 真實資料快照（只在本機用，絕對不能進版控）
 www/_snapshot*
+
+# 開發筆記只留在本機（repo 是公開的）
+開發筆記.md
