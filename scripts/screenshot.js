@@ -522,6 +522,74 @@ async function run() {
   await page.locator('#dividend-sheet [data-close]').click();
   await page.waitForTimeout(400);
 
+  /* 記一筆：捲到第 80 筆才發現中間漏記，不該還要捲回最上面去按 */
+  console.log('\n── 記一筆 ──');
+  const fabOnRecord = await page.locator('#btn-fab').isVisible();
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await page.waitForTimeout(250);
+  const fabAfterScroll = await page.locator('#btn-fab').isVisible();
+  console.log(`  ${fabOnRecord && fabAfterScroll ? '✅' : '❌'} 記錄頁右下角有加號，捲到底也還在`);
+  if (!fabOnRecord || !fabAfterScroll) problems.push('記錄頁的加號沒有固定在右下角');
+  await shot(page, '20-記一筆-捲到底');
+
+  await page.locator('.tab[data-page="holdings"]').click();
+  await page.waitForTimeout(250);
+  const fabElsewhere = await page.locator('#btn-fab').isHidden();
+  console.log(`  ${fabElsewhere ? '✅' : '❌'} 其他頁沒有那顆`);
+  if (!fabElsewhere) problems.push('加號在非記錄頁也出現了');
+
+  await page.locator('.tab[data-page="record"]').click();
+  await page.waitForTimeout(250);
+  await page.locator('#btn-fab').click();
+  await page.waitForTimeout(400);
+  const needCategory = await page.locator('#quick-picker').isVisible()
+    && await page.locator('#quick-actions').isHidden();
+  console.log(`  ${needCategory ? '✅' : '❌'} 從加號進來要先選類別`);
+  if (!needCategory) problems.push('加號進來沒有先問類別');
+
+  await page.locator('#quick-picker [data-quick-category="ETF"]').click();
+  await page.waitForTimeout(250);
+  await page.locator('#quick-actions [data-quick-action="buy"]').click();
+  await page.waitForTimeout(450);
+  const openedBuy = (await page.locator('#trade-sheet-title').innerText()).includes('買進');
+  console.log(`  ${openedBuy ? '✅' : '❌'} 選了動作就開對應的表單`);
+  if (!openedBuy) problems.push('從加號選買進沒有開出交易表單');
+  await page.locator('#trade-sheet [data-close]').click();
+  await page.waitForTimeout(450);
+
+  // 從某一檔的明細進來：類別與標的都已經知道了
+  await page.locator('.tab[data-page="holdings"]').click();
+  await page.waitForTimeout(300);
+  await page.locator('.hold__row').first().click();
+  await page.waitForTimeout(250);
+  await page.locator('[data-detail-id]').first().click();
+  await page.waitForTimeout(450);
+  await page.locator('#btn-detail-add').click();
+  await page.waitForTimeout(400);
+
+  const skipCategory = await page.locator('#quick-picker').isHidden()
+    && await page.locator('#quick-actions').isVisible()
+    && await page.locator('#quick-action-cash').isHidden();
+  console.log(`  ${skipCategory ? '✅' : '❌'} 從明細進來不用再選類別，也不給入金出金`);
+  if (!skipCategory) problems.push('從標的明細記一筆時還要重選類別');
+  await shot(page, '20b-記一筆-從明細');
+
+  await page.locator('#quick-actions [data-quick-action="dividend"]').click();
+  await page.waitForTimeout(450);
+  const picked = await page.locator('#d-instrument')
+    .evaluate((el) => (el.selectedOptions[0] || {}).textContent || '');
+  console.log(`  ${picked.trim() ? '✅' : '❌'} 標的已經替你選好：${picked.trim() || '（空）'}`);
+  if (!picked.trim()) problems.push('從標的明細記一筆時沒有預選標的');
+
+  // 關掉之後要回到那一檔的明細，不是整個掉回持股頁
+  await page.locator('#dividend-sheet [data-close]').click();
+  await page.waitForTimeout(700);
+  const backToDetail = await page.locator('#detail-sheet').isVisible();
+  console.log(`  ${backToDetail ? '✅' : '❌'} 關掉之後回到那一檔的明細`);
+  if (!backToDetail) problems.push('從明細記一筆後沒有回到明細');
+  await page.locator('#detail-sheet [data-close]').click();
+  await page.waitForTimeout(450);
+
   console.log('\n── 報表頁 ──');
   await page.locator('.tab[data-page="report"]').click();
   await page.waitForTimeout(300);
@@ -573,7 +641,7 @@ async function run() {
   await page.locator('.tab[data-page="holdings"]').click();
   await page.waitForTimeout(300);
 
-  // 收合時只看得到「名字 ＋ 賺賠多少」，細節要展開才在
+  // 收合時只看得到「名字 ＋ 投了多少 ＋ 領了多少息」，其餘展開才在
   const expandAll = async () => {
     const rows = await page.locator('.hold__row').all();
     for (const row of rows) {
@@ -589,6 +657,52 @@ async function run() {
   await check(page, 'hd-value', EXPECT['hd-value'], '總市值');
   await check(page, 'hd-cost', EXPECT['hd-cost'], '總成本');
   await check(page, 'hd-pl', EXPECT['hd-pl'], '含息報酬');
+
+  /* 收合那行的主角是「這支投了多少」，配息跟著上副標。
+     賺賠與報酬率都在「顯示哪些資訊」裡，預設關著——這頁回答的是
+     「我投了多少、有什麼」，不是「我賺了嗎」 */
+  const etfCard = (await page.locator('.hold', { hasText: '元大高股息' }).first().innerText())
+    .replace(/\s+/g, ' ');
+  console.log(`  0056 卡片：${etfCard.slice(0, 70)}…`);
+
+  const okMain = etfCard.includes('$110,357') && etfCard.includes('投入');
+  console.log(`  ${okMain ? '✅' : '❌'} 主數字是投入 $110,357`);
+  if (!okMain) problems.push(`收合列的主數字不是投入：${etfCard}`);
+
+  const okSub = etfCard.includes('配息 $6,404');
+  console.log(`  ${okSub ? '✅' : '❌'} 副標帶配息 $6,404`);
+  if (!okSub) problems.push(`副標沒有配息：${etfCard}`);
+
+  const plQuiet = !etfCard.includes('含息報酬') && !etfCard.includes('價格漲跌');
+  const totalsQuiet = await page.locator('#hd-pl-row').isHidden();
+  console.log(`  ${plQuiet && totalsQuiet ? '✅' : '❌'} 賺賠預設不出現（卡片與總計都是）`);
+  if (!plQuiet || !totalsQuiet) problems.push('賺賠預設就顯示出來了，應該要關著');
+
+  // 勾起來才出現，而且卡片與總計一起亮
+  await page.locator('#btn-fields').click();
+  await page.waitForTimeout(400);
+  await page.locator('#field-toggles label:has(input[data-field="pl"])').click();
+  await page.waitForTimeout(250);
+  await page.locator('#fields-sheet [data-close]').click();
+  await page.waitForTimeout(400);
+  await expandAll();
+
+  const withPL = (await page.locator('.hold', { hasText: '元大高股息' }).first().innerText())
+    .replace(/\s+/g, ' ');
+  const shownPL = withPL.includes('含息報酬') && withPL.includes('+$10,647');
+  const totalsShown = await page.locator('#hd-pl-row').isVisible();
+  console.log(`  ${shownPL && totalsShown ? '✅' : '❌'} 勾「賺賠金額」後出現 +$10,647，總計也跟著亮`);
+  if (!shownPL || !totalsShown) problems.push(`勾了賺賠卻沒出現：${withPL}`);
+  await shot(page, '09g-賺賠打開');
+
+  // 關回去，後面的驗算維持預設狀態
+  await page.locator('#btn-fields').click();
+  await page.waitForTimeout(400);
+  await page.locator('#field-toggles label:has(input[data-field="pl"])').click();
+  await page.waitForTimeout(250);
+  await page.locator('#fields-sheet [data-close]').click();
+  await page.waitForTimeout(400);
+  await expandAll();
 
   await check(page, 'rp-real', EXPECT['rp-real'], '已實現損益');
 
@@ -640,10 +754,16 @@ async function run() {
   console.log(`  ${noRateBug ? '✅' : '❌'} 沒有掉進「忘了乘匯率」的算法`);
   if (!noRateBug) problems.push('美元計價基金沒有乘上匯率');
 
-  // 對帳單的「參考損益」是含配息的：41,468 − 30,000 + 380 = 11,848
-  const hasTotalReturn = flatUsd.includes('合計') && flatUsd.includes('$11,848');
-  console.log(`  ${hasTotalReturn ? '✅' : '❌'} 含息合計 +$11,848`);
-  if (!hasTotalReturn) problems.push(`含息合計不對：${flatUsd}`);
+  /* 對帳單的「參考損益」是含配息的：41,468 − 30,000 + 380 = 11,848。
+     賺賠現在預設不顯示（在「顯示哪些資訊」裡），所以直接問計算層——
+     這條驗的本來就是「匯率有沒有乘進損益」，不是畫面上寫了什麼 */
+  const totalReturn = await page.evaluate(() => {
+    const p = buildPositions().find((x) => x.instrument.name === '天達環球動力');
+    return p ? Math.round(p.value - p.cost + p.dividends) : null;
+  });
+  const okReturn = totalReturn === 11848;
+  console.log(`  ${okReturn ? '✅' : '❌'} 含息報酬 ${totalReturn && totalReturn.toLocaleString('en-US')}（應為 11,848）`);
+  if (!okReturn) problems.push(`美元計價基金的含息報酬得到 ${totalReturn}，應為 11848`);
 
   console.log('\n── 已出清 ──');
   const closedVisible = await page.locator('#closed-section').isVisible();

@@ -50,6 +50,9 @@ const HOLDING_FIELDS = [
   { key: 'rate', label: '匯率', hint: '美元計價才有' },
   // 集中度看的是「押了多少在這檔上」，所以基金的單筆與定期定額要合起來算
   { key: 'share', label: '佔比', hint: '這檔占總市值多少' },
+  // 賺賠預設不出現。金額和百分比分開勾——那個百分比含配息，跟券商的算法不一樣
+  { key: 'pl', label: '賺賠金額', hint: '含配息' },
+  { key: 'plpct', label: '報酬率', hint: '含配息，會比券商高' },
 ];
 
 const DEFAULT_FIELDS = ['avg', 'price', 'rate'];
@@ -131,6 +134,7 @@ const state = {
 
   editing: null,         // { entity, id } 正在編輯的紀錄
   draft: {},             // 表單暫存：category、action、unit、style…
+  quick: { instrumentId: null, category: null },   // 「記一筆」面板選到哪
 };
 
 /* ==========================================================================
@@ -1182,6 +1186,9 @@ function render() {
   $('page-ledger').hidden = page !== 'ledger';
   $('page-settings').hidden = page !== 'settings';
 
+  // 只有記錄頁有「記一筆」這個動作
+  $('btn-fab').hidden = page !== 'record';
+
   for (const tab of document.querySelectorAll('.tab')) {
     const active = tab.dataset.page === page;
     tab.classList.toggle('is-active', active);
@@ -1619,6 +1626,8 @@ function renderHoldings() {
   $('hd-cost').textContent = fmtMoney(cost);
   $('hd-div').textContent = fmtMoney(dividends);
   setPL($('hd-pl'), value - cost + dividends);
+  // 總計的賺賠跟卡片裡的同一個開關，不然收合列不講、總計卻大字寫著
+  $('hd-pl-row').hidden = !state.fields.includes('pl') && !state.fields.includes('plpct');
 
   // 手續費總額寫在開關旁邊，才知道這個勾影響多少錢
   const fee = held.reduce((s, p) => s + p.fee, 0);
@@ -1738,59 +1747,61 @@ function holdingHtml(card, totalValue = 0) {
     usd ? '<span class="hold__tag hold__tag--usd">USD</span>' : '',
   ].join('');
 
-  /* ---------- 收合時看到的那一列 ---------- */
+  /* ---------- 收合時看到的那一列 ----------
 
-  // 沒有成本就沒有「賺賠」可言，硬算出來的數字只會騙人
+     主數字是「這支投了多少」。這本簿子是拿來查「我有什麼」的，不是「我賺了嗎」——
+     賺賠和報酬率都在「顯示哪些資訊」裡，預設關著。
+
+     順帶一提，App 的報酬率本來就會比券商高，因為它把配息算進去了
+     （券商的 ETF 庫存只算價差）。那是為了對得上基金對帳單的「參考損益」，
+     同一個畫面沒辦法同時對上兩種對帳單。 */
+
+  // 沒有成本就沒有「投入多少」可言，硬算出來的數字只會騙人
   const costUnknown = lots.some((p) => p.costUnknown);
 
-  let headline;
-  if (costUnknown) {
-    headline = '<span class="hold__amount is-flat">—</span><span class="hold__pct is-flat">缺成本</span>';
-  } else if (hasPrice) {
-    headline = `<span class="hold__amount ${toneOf(total)}">${fmtMoney(total, { sign: true })}</span>
-       <span class="hold__pct ${toneOf(total)}">${fmtPct(total, cost)}</span>`;
-  } else {
-    headline = '<span class="hold__amount is-flat">—</span><span class="hold__pct is-flat">未填價</span>';
-  }
+  const headline = costUnknown
+    ? '<span class="hold__amount is-flat">—</span><span class="hold__pct is-flat">缺成本</span>'
+    : `<span class="hold__amount">${fmtMoney(cost)}</span>
+       <span class="hold__pct is-flat">投入</span>`;
 
-  const summary = [fmtQty(card.type, qty), hasPrice ? fmtMoney(value) : ''].filter(Boolean).join(' · ');
+  // 配息 0 的時候不佔位子——沒領過就是沒領過，寫「配息 $0」只是雜訊
+  const summary = [
+    fmtQty(card.type, qty),
+    dividends > 0 ? `配息 ${fmtMoney(dividends)}` : '',
+  ].filter(Boolean).join(' · ');
 
-  /* ---------- 展開後的損益拆解 ---------- */
+  /* ---------- 展開後 ---------- */
 
   const line = (label, value, extra = '') =>
     `<div class="split-row ${extra}"><span>${label}</span><span>${value}</span></div>`;
 
   const detail = [];
 
+  const on = (key) => state.fields.includes(key);
+
   if (costUnknown) {
     detail.push(line('持有', fmtQty(card.type, qty)));
-    if (hasPrice) detail.push(line('目前市值', `<b>${fmtMoney(value)}</b>`));
+    if (hasPrice) detail.push(line('現值', `<b>${fmtMoney(value)}</b>`));
     detail.push(line('領到的配息', `<b>${fmtMoney(dividends)}</b>`));
     detail.push(`<p class="hold__note">這個部位沒有成本資料（期初只填了數量），
-      算不出賺賠。到「所有紀錄」把期初那筆的金額補上就會出現。</p>`);
+      算不出投入多少。到「所有紀錄」把期初那筆的金額補上就會出現。</p>`);
   } else if (hasPrice) {
-    detail.push(`
-      <div class="flow">
-        <span class="flow__side"><small>投入</small>${fmtMoney(cost)}</span>
-        <span class="flow__arrow" aria-hidden="true">→</span>
-        <span class="flow__side flow__side--end"><small>現值</small>${fmtMoney(value)}</span>
-      </div>`);
+    detail.push(line('現值', `<b>${fmtMoney(value)}</b>`));
 
-    detail.push(line('價格漲跌',
-      `<b class="${toneOf(unrealized)}">${fmtMoney(unrealized, { sign: true })}
-        <small>${fmtPct(unrealized, cost)}</small></b>`));
-    detail.push(line('領到的配息', `<b>${fmtMoney(dividends)}</b>`));
-    detail.push(line('合計',
-      `<b class="${toneOf(total)}">${fmtMoney(total, { sign: true })}
-        <small>${fmtPct(total, cost)}</small></b>`, 'split-row--total'));
+    // 賺賠預設不出現。要看的人自己去「顯示哪些資訊」勾，
+    // 金額和百分比分開勾——百分比跟券商的算法不一樣，不是每個人都想看
+    if (on('pl') || on('plpct')) {
+      const amount = on('pl') ? fmtMoney(total, { sign: true }) : '';
+      const pct = on('plpct') ? `<small>${fmtPct(total, cost)}</small>` : '';
+      detail.push(line('含息報酬',
+        `<b class="${toneOf(total)}">${amount} ${pct}</b>`, 'split-row--total'));
+    }
   } else {
-    detail.push(line('投入成本', `<b>${fmtMoney(cost)}</b>`));
     detail.push(line('領到的配息', `<b>${fmtMoney(dividends)}</b>`));
-    detail.push(`<p class="hold__note">還沒填${priceLabel}，算不出市值和損益</p>`);
+    detail.push(`<p class="hold__note">還沒填${priceLabel}，算不出現值</p>`);
   }
 
   // 單價資訊放小字：知道成本和現價各是多少，但不搶主數字的版面
-  const on = (key) => state.fields.includes(key);
   const facts = [];
   if (on('avg') && !split) {
     facts.push(`${usd ? '每單位成本' : '平均成本'} ${fmtNum(lots[0].avgPrice, usd ? 2 : 4)}`);
@@ -1862,8 +1873,10 @@ function styleLabel(style, type) {
 }
 
 function lotHtml(position, hasPrice) {
-  const unrealized = hasPrice ? position.value - position.cost : null;
   const usd = isUsd(position.instrument);
+  // 分段的賺賠也跟著「顯示哪些資訊」走，不然收合列不講、分段卻自己講
+  const showPL = state.fields.includes('pl') || state.fields.includes('plpct');
+  const unrealized = hasPrice && showPL ? position.value - position.cost : null;
 
   // 投入成本另起一行，第一行才不會擠。
   // 這裡不放報酬率，卡片上方已經有整檔的了
@@ -1878,7 +1891,7 @@ function lotHtml(position, hasPrice) {
       <span class="lot__name">${styleLabel(position.style, position.type)}</span>
       <span class="lot__qty">${fmtQty(position.type, position.qty)}</span>
       <span class="lot__avg"></span>
-      ${plHtml(unrealized, 0, { cls: 'lot__pl' })}
+      ${showPL ? plHtml(unrealized, 0, { cls: 'lot__pl' }) : '<span class="lot__pl"></span>'}
       <span class="lot__sub">${sub}</span>
     </div>`;
 }
@@ -2130,6 +2143,33 @@ function openDetailSheet(instrumentId, { restoreScroll = false } = {}) {
   // 每次都彈回最上面等於要重找一次
   const body = $('detail-sheet').querySelector('.sheet__body');
   requestAnimationFrame(() => { body.scrollTop = restoreScroll ? state.detailScroll : 0; });
+}
+
+/**
+ * 快速記一筆。兩個入口共用：
+ *
+ *   右下角的加號   —— 什麼都還不知道，先選類別再選動作
+ *   標的明細的「＋」—— 類別與標的都已經知道了，只要選動作；
+ *                     入金出金跟個別標的無關，那時候不給
+ */
+function openQuickSheet(instrumentId = null) {
+  const inst = instrumentId ? instrumentById(instrumentId) : null;
+  state.quick = { instrumentId: inst ? inst.id : null, category: inst ? inst.type : null };
+
+  $('quick-sheet-title').textContent = inst
+    ? (inst.name || inst.code || '這一檔')
+    : '要記錄什麼？';
+
+  $('quick-picker').hidden = !!inst;
+  $('quick-actions').hidden = !inst;
+  $('quick-action-cash').hidden = !!inst;
+  $('quick-actions-title').textContent = inst ? `${inst.type} · 記一筆` : '';
+
+  for (const btn of document.querySelectorAll('#quick-picker .picker__btn')) {
+    btn.classList.remove('is-active');
+  }
+
+  openSheet('quick-sheet');
 }
 
 /** 離開明細去編輯之前，記住是哪一檔、捲到哪，等一下要回來 */
@@ -2445,7 +2485,7 @@ function fillInstrumentSelect(selectId, type, selectedId) {
    買進 / 賣出表單
    ========================================================================== */
 
-function openTradeSheet({ category, action, record = null }) {
+function openTradeSheet({ category, action, record = null, prefill = null }) {
   state.draft = {
     category,
     action,
@@ -2459,7 +2499,9 @@ function openTradeSheet({ category, action, record = null }) {
   $('btn-trade-delete').hidden = !record;
   showError('trade-error', '');
 
-  fillInstrumentSelect('t-instrument', category, record ? record.instrumentId : '');
+  // 從某一檔的明細點「＋ 記一筆」進來的話，標的先選好
+  fillInstrumentSelect('t-instrument', category,
+    (record && record.instrumentId) || (prefill && prefill.instrumentId) || '');
 
   // 欄位標籤與順序照各自的單據來排：
   //   ETF        券商的想法：數量 → 價格 → 金額
@@ -3396,7 +3438,8 @@ function bindEvents() {
     if (!state.showAllRecent) $('recent-title').scrollIntoView({ block: 'nearest' });
   });
 
-  for (const btn of document.querySelectorAll('.action')) {
+  // 限定記錄頁那一組——「記一筆」面板裡也有 .action，不要被一起抓走
+  for (const btn of document.querySelectorAll('#actions .action')) {
     btn.addEventListener('click', () => {
       const category = state.category;
       if (!category) return;
@@ -3405,6 +3448,34 @@ function bindEvents() {
       if (action === 'buy') openTradeSheet({ category, action: BUY });
       if (action === 'sell') openTradeSheet({ category, action: SELL });
       if (action === 'dividend') openDividendSheet({ category });
+      if (action === 'cash') openCashSheet({ category });
+    });
+  }
+
+  // ---- 記一筆（右下角的加號 ＋ 標的明細裡的「＋ 記一筆」）----
+  $('btn-fab').addEventListener('click', () => openQuickSheet());
+
+  for (const btn of document.querySelectorAll('#quick-picker .picker__btn')) {
+    btn.addEventListener('click', () => {
+      state.quick.category = btn.dataset.quickCategory;
+      for (const other of document.querySelectorAll('#quick-picker .picker__btn')) {
+        other.classList.toggle('is-active', other === btn);
+      }
+      $('quick-actions').hidden = false;
+      $('quick-actions-title').textContent = state.quick.category;
+    });
+  }
+
+  for (const btn of document.querySelectorAll('#quick-actions .action')) {
+    btn.addEventListener('click', () => {
+      const { category, instrumentId } = state.quick;
+      if (!category) return;
+      const action = btn.dataset.quickAction;
+      const prefill = instrumentId ? { instrumentId } : null;
+
+      if (action === 'buy') openTradeSheet({ category, action: BUY, prefill });
+      if (action === 'sell') openTradeSheet({ category, action: SELL, prefill });
+      if (action === 'dividend') openDividendSheet({ category, prefill });
       if (action === 'cash') openCashSheet({ category });
     });
   }
@@ -3540,6 +3611,12 @@ function bindEvents() {
   });
 
   // ---- 標的明細 ----
+  $('btn-detail-add').addEventListener('click', () => {
+    if (!state.detailId) return;
+    rememberDetailPosition();   // 記完會自己回到這一檔的明細
+    openQuickSheet(state.detailId);
+  });
+
   $('detail-filter').addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;

@@ -247,17 +247,19 @@
     <!-- ---------- 分頁 3：持股 ---------- -->
     <section class="page" id="page-holdings" aria-label="持股" hidden>
 
+      <!-- 投入排第一：這頁回答的是「我投了多少、有什麼」，不是「我賺了嗎」 -->
       <div class="totals" id="holdings-totals">
-        <div class="totals__row">
-          <span>市值</span><strong id="hd-value">$0</strong>
-        </div>
         <div class="totals__row">
           <span>投入成本</span><strong id="hd-cost">$0</strong>
         </div>
         <div class="totals__row">
+          <span>市值</span><strong id="hd-value">$0</strong>
+        </div>
+        <div class="totals__row">
           <span>累計配息</span><strong id="hd-div">$0</strong>
         </div>
-        <div class="totals__row totals__row--main">
+        <!-- 跟卡片裡的賺賠同一個開關，預設關著 -->
+        <div class="totals__row totals__row--main" id="hd-pl-row" hidden>
           <span>含息報酬</span><strong id="hd-pl">$0</strong>
         </div>
 
@@ -447,6 +449,13 @@
   </main>
 
   <!-- ========== 底部分頁 ========== -->
+  <!-- 捲到哪裡都記得了一筆，不用回到最上面去按 -->
+  <button class="fab" id="btn-fab" type="button" aria-label="記一筆" hidden>
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+    </svg>
+  </button>
+
   <nav class="tabbar" role="tablist">
     <button class="tab is-active" data-page="record" role="tab" aria-selected="true" type="button">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
@@ -764,6 +773,59 @@
 </div>
 
 <!-- ========== 標的明細：某一檔的所有紀錄 ========== -->
+<!-- 快速記一筆：右下角的加號，以及標的明細裡的「＋ 記一筆」都開這個。
+     從加號進來要先選類別；從某一檔的明細進來則類別與標的都已知，只要選動作 -->
+<div class="sheet" id="quick-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="quick-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">關閉</button>
+    <h2 class="sheet__title" id="quick-sheet-title">要記錄什麼？</h2>
+    <span class="sheet__head-gap" aria-hidden="true"></span>
+  </div>
+
+  <div class="sheet__body">
+    <div class="picker" id="quick-picker">
+      <button class="picker__btn picker__btn--etf" data-quick-category="ETF" type="button">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+          <path d="M4 17.5l5-5 3.5 3.5L20 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M15 8h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>ETF</span>
+      </button>
+      <button class="picker__btn picker__btn--fund" data-quick-category="基金" type="button">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 3.8v8.2l5.8 5.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>基金</span>
+      </button>
+    </div>
+
+    <div class="actions" id="quick-actions" hidden>
+      <p class="section-title section-title--tight" id="quick-actions-title">ETF</p>
+      <div class="actions__grid">
+        <button class="action" data-quick-action="buy" type="button">
+          <span class="action__mark action__mark--buy" aria-hidden="true">＋</span>
+          <span>買進</span>
+        </button>
+        <button class="action" data-quick-action="sell" type="button">
+          <span class="action__mark action__mark--sell" aria-hidden="true">－</span>
+          <span>賣出</span>
+        </button>
+        <button class="action" data-quick-action="dividend" type="button">
+          <span class="action__mark action__mark--div" aria-hidden="true">$</span>
+          <span>配息</span>
+        </button>
+        <button class="action" data-quick-action="cash" type="button" id="quick-action-cash">
+          <span class="action__mark action__mark--cash" aria-hidden="true">⇅</span>
+          <span>入金出金</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="sheet" id="detail-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="detail-sheet-title">
   <div class="sheet__grip" aria-hidden="true"></div>
 
@@ -780,6 +842,8 @@
       <button class="chip is-active" type="button" data-detail="all">全部</button>
       <button class="chip" type="button" data-detail="trade">買賣</button>
       <button class="chip" type="button" data-detail="dividend">配息</button>
+      <!-- 在這一檔的紀錄裡直接補記，不用退出去重選標的 -->
+      <button class="chip chip--add" type="button" id="btn-detail-add">＋ 記一筆</button>
     </div>
 
     <div class="entries" id="detail-list"></div>

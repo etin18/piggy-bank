@@ -1588,6 +1588,14 @@ button, input, select, textarea {
   gap: 7px;
 }
 
+/* 同一排的最右邊，但它不是篩選——用主色跟左邊三顆分開 */
+.chip--add {
+  margin-left: auto;
+  border-color: var(--accent);
+  color: var(--accent-deep);
+  font-weight: 700;
+}
+
 .detail-empty {
   margin: 20px 0;
   text-align: center;
@@ -1853,6 +1861,46 @@ button, input, select, textarea {
 /* ==========================================================================
    底部面板（表單）
    ========================================================================== */
+
+/* ==========================================================================
+   記一筆（右下角那顆）
+
+   捲到第 80 筆才發現中間漏記一筆，不該還要捲回最上面去按。
+   只有記錄頁有它——其他三頁沒有「記一筆」這個動作。
+   z-index 壓在 tabbar（30）底下、遮罩（40）底下，面板打開時它會被蓋住。
+   ========================================================================== */
+
+.fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--tabbar-h) + var(--safe-b) + 14px);
+  z-index: 28;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-lift);
+  cursor: pointer;
+  transition: transform .12s;
+}
+.fab:active { transform: scale(.94); }
+.fab:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 3px; }
+
+/* 那顆會蓋住最後一列的右半邊，所以記錄頁多留一點底 */
+#page-record { padding-bottom: 74px; }
+
+/* 面板標題要置中，右邊補一塊跟「關閉」差不多寬的空白 */
+.sheet__head-gap { width: 44px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fab { transition: none; }
+  .fab:active { transform: none; }
+}
 
 .scrim {
   position: fixed;
