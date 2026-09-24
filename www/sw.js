@@ -7,7 +7,7 @@
 
 // 改動 www/ 裡的檔案後記得把版號 +1，
 // 否則手機會一直吃舊快取，看不到新版
-const VERSION = 'v23';
+const VERSION = 'v24';
 const CACHE = `piggy-bank-${VERSION}`;
 
 // 本機開發時完全不走快取：改了檔案重整就要看得到，
@@ -60,10 +60,13 @@ self.addEventListener('fetch', (event) => {
   // 跨網域（Apps Script API）直接走網路，不碰快取
   if (url.origin !== self.location.origin) return;
 
-  // 導覽請求：先試網路拿最新版，失敗才用快取 —— 離線時照樣開得起來
+  // 導覽請求：先試網路拿最新版，失敗才用快取 —— 離線時照樣開得起來。
+  // cache: 'reload' 是關鍵：普通的 fetch() 會先吃瀏覽器的 HTTP 快取，
+  // GitHub Pages 送的是 max-age=600，所以「網路優先」其實是「HTTP 快取優先」，
+  // 改版後照樣拿到舊檔。
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: 'reload' })
         .then((res) => {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put('index.html', copy));
@@ -79,7 +82,7 @@ self.addEventListener('fetch', (event) => {
   // 使用者只會覺得「明明修好了怎麼還是壞的」。離線時仍然退回快取。
   if (/\.(js|css)$/.test(url.pathname)) {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: 'reload' })
         .then((res) => {
           if (res && res.status === 200) {
             const copy = res.clone();

@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v23';
+const APP_VERSION = 'v24';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -3859,6 +3859,13 @@ function init() {
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').then((reg) => {
+        // 主畫面開啟的 PWA 常常只是恢復前景、不會重新導覽，
+        // 新版就一直等不到人去檢查。每次載入和每次回到前景都主動問一次。
+        reg.update().catch(() => { /* 沒網路就算了 */ });
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) reg.update().catch(() => { /* 同上 */ });
+        });
+
         // 有新版時講一聲，不然使用者會以為修好的東西還是壞的
         reg.addEventListener('updatefound', () => {
           const incoming = reg.installing;
@@ -3870,6 +3877,15 @@ function init() {
           });
         });
       }).catch(() => { /* 沒註冊成功也不影響使用 */ });
+
+      // 新的 sw 接手之後自動重載一次，不然畫面還是舊程式畫出來的。
+      // 用旗標擋住無限重載（Chrome 在某些情況會重複觸發）
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloading) return;
+        reloading = true;
+        window.location.reload();
+      });
     });
   }
 }
