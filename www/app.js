@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v22';
+const APP_VERSION = 'v23';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -33,6 +33,7 @@ const LS = {
   fields: 'pb.fields',    // 持股頁要顯示哪些資訊，只存在這台裝置
   excludeFee: 'pb.excludeFee',
   reportSplit: 'pb.reportSplit',
+  privacy: 'pb.privacy',  // 遮金額只存在這台裝置
   ledger: 'pb.ledger',    // 明細頁的期間與篩選
   apiVersion: 'pb.apiVersion',
   data: 'pb.',            // pb.instruments、pb.trades …
@@ -116,6 +117,7 @@ const state = {
   fields: DEFAULT_FIELDS.slice(),   // 持股卡片顯示哪些資訊
   excludeFee: false,     // 投入成本要不要把手續費算進去
   reportSplit: false,    // 報表頁：合計，或 ETF／基金 分開看
+  privacy: false,        // 遮住金額，把畫面拿給別人看的時候用
 
   // 明細頁的篩選，整包存在這台裝置
   ledger: {
@@ -189,7 +191,16 @@ function parseNum(value) {
   return isFinite(n) ? n : 0;
 }
 
+/**
+ * 遮住金額時的替身。
+ *
+ * 遮蔽做在格式化這一層，不是用 CSS 蓋——只要是經過 fmtMoney 出去的數字就一定遮得到，
+ * 不會因為哪個畫面忘了加 class 而漏掉一個地方。位數也不會從寬度洩漏出去。
+ */
+const MASK = '$•••';
+
 function fmtMoney(n, { sign = false } = {}) {
+  if (state.privacy) return MASK;
   const v = Math.round(Number(n) || 0);
   const text = '$' + Math.abs(v).toLocaleString('en-US');
   if (v < 0) return '−' + text;
@@ -200,6 +211,7 @@ function fmtMoney(n, { sign = false } = {}) {
 function fmtShort(n) {
   const v = Math.round(Number(n) || 0);
   if (!v) return '';
+  if (state.privacy) return '•••';
   if (Math.abs(v) >= 10000) {
     const w = v / 10000;
     return (Math.abs(w) >= 10 ? Math.round(w) : w.toFixed(1).replace(/\.0$/, '')) + '萬';
@@ -274,6 +286,7 @@ function loadLocal() {
     state.apiVersion = localStorage.getItem(LS.apiVersion) || '';
     state.excludeFee = localStorage.getItem(LS.excludeFee) === '1';
     state.reportSplit = localStorage.getItem(LS.reportSplit) === '1';
+    state.privacy = localStorage.getItem(LS.privacy) === '1';
 
     // 明細頁的篩選：只收認得的值，改版後留下的舊 key 直接丟掉
     const ledger = JSON.parse(localStorage.getItem(LS.ledger) || 'null');
@@ -1189,6 +1202,12 @@ function render() {
   // 只有記錄頁有「記一筆」這個動作
   $('btn-fab').hidden = page !== 'record';
 
+  const eye = $('btn-privacy');
+  eye.classList.toggle('is-on', state.privacy);
+  eye.setAttribute('aria-pressed', state.privacy ? 'true' : 'false');
+  eye.setAttribute('aria-label', state.privacy ? '顯示金額' : '遮住金額');
+
+
   for (const tab of document.querySelectorAll('.tab')) {
     const active = tab.dataset.page === page;
     tab.classList.toggle('is-active', active);
@@ -1211,15 +1230,8 @@ function render() {
 /* ---------- 記錄頁 ---------- */
 
 function renderRecord() {
-  const year = thisYear();
-  const stats = dividendStats(year);
-  const elapsed = monthsElapsed(year);
-
-  $('summary-label').textContent = `${year} 年配息`;
-  $('summary-total').textContent = fmtMoney(stats.total);
-  $('summary-avg').textContent = fmtMoney(stats.total / elapsed);
-
-  for (const btn of document.querySelectorAll('.picker__btn')) {
+  // 限定這一頁——「記一筆」面板裡也有 .picker__btn
+  for (const btn of document.querySelectorAll('#page-record .picker__btn')) {
     btn.classList.toggle('is-active', btn.dataset.category === state.category);
   }
 
@@ -3411,6 +3423,12 @@ function bindEvents() {
   $('btn-settings').addEventListener('click', () => {
     state.page = state.page === 'settings' ? 'record' : 'settings';
     window.scrollTo(0, 0);
+    render();
+  });
+
+  $('btn-privacy').addEventListener('click', () => {
+    state.privacy = !state.privacy;
+    try { localStorage.setItem(LS.privacy, state.privacy ? '1' : '0'); } catch (err) { /* 無妨 */ }
     render();
   });
 

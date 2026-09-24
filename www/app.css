@@ -2433,3 +2433,17 @@ select.input {
 
 /* 面板背後的遮罩要更暗，照片本來就亮 */
 :is([data-theme="haze"], [data-theme="forest"]) .scrim { background: rgba(4,12,8,.58); }
+
+/* 遮住金額時，眼睛本身要看得出是「開著的狀態」——
+   不然畫面全是 $••• 卻不知道怎麼切回來 */
+.icon-btn.is-on {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* 兩顆眼睛用 class 切，不能用 hidden：
+   SVGElement 不繼承 HTMLElement，沒有 hidden 這個 property，
+   svg.hidden = true 只會在 JS 物件上掛個沒人看得到的欄位，attribute 不會變。 */
+.eye--shut { display: none; }
+.icon-btn.is-on .eye--open { display: none; }
+.icon-btn.is-on .eye--shut { display: block; }

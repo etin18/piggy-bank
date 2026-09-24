@@ -200,8 +200,6 @@ const SEED = {
    換成 2025 會退回那個時點 —— 2026 年那幾筆買進都還沒發生：
      期初 30,000 ＋ 定期定額 5,025 × 2 ＋ 0056 73,104 ＋ 天達 30,000 ＝ 143,154 */
 const EXPECT = {
-  'summary-total': '$8,391',
-  'summary-avg': '$932',
   'rp-total': '$8,391',
   'rp-etf': '$7,117',
   'rp-fund': '$1,274',
@@ -295,8 +293,6 @@ async function run() {
 
   console.log('\n── 記錄頁 ──');
   await shot(page, '01-記錄');
-  await check(page, 'summary-total', EXPECT['summary-total'], '今年配息');
-  await check(page, 'summary-avg', EXPECT['summary-avg'], '平均每月');
 
   console.log('\n── 最近紀錄只列 5 筆 ──');
   const shown = await page.locator('#recent-list .entry').count();
@@ -589,6 +585,38 @@ async function run() {
   if (!backToDetail) problems.push('從明細記一筆後沒有回到明細');
   await page.locator('#detail-sheet [data-close]').click();
   await page.waitForTimeout(450);
+
+  /* 遮金額：要拿畫面給別人看的時候按一下，四個分頁的金額全部變成 $•••。
+     遮蔽做在 fmtMoney 那一層，所以不會有哪個畫面漏掉 */
+  console.log('\n── 遮住金額 ──');
+  await page.locator('.tab[data-page="record"]').click();
+  await page.waitForTimeout(250);
+  await page.locator('#btn-privacy').click();
+  await page.waitForTimeout(350);
+  await shot(page, '21-遮住金額');
+
+  const leaked = [];
+  for (const [tab, label] of [['record', '記錄'], ['report', '報表'], ['holdings', '持股'], ['ledger', '明細']]) {
+    await page.locator(`.tab[data-page="${tab}"]`).click();
+    await page.waitForTimeout(300);
+    const text = (await page.locator('#main').innerText()).replace(/\s+/g, ' ');
+    // 金額一律有千分位或以 $ 開頭；遮掉之後畫面上不該再出現 $ 加數字
+    const hits = text.match(/\$[\d,]+/g) || [];
+    if (hits.length) leaked.push(`${label}：${hits.slice(0, 4).join(' ')}`);
+  }
+  console.log(`  ${leaked.length === 0 ? '✅' : '❌'} 四個分頁都看不到金額`);
+  if (leaked.length) problems.push(`遮金額後仍看得到：${leaked.join('；')}`);
+
+  await page.locator('.tab[data-page="holdings"]').click();
+  await page.waitForTimeout(250);
+  await shot(page, '21b-遮住金額-持股');
+
+  await page.locator('#btn-privacy').click();
+  await page.waitForTimeout(350);
+  const restored = (await page.locator('#hd-cost').innerText()).includes('$');
+  const backToNumbers = restored && !(await page.locator('#hd-cost').innerText()).includes('•');
+  console.log(`  ${backToNumbers ? '✅' : '❌'} 再按一下金額就回來`);
+  if (!backToNumbers) problems.push('關掉遮蔽後金額沒有回來');
 
   console.log('\n── 報表頁 ──');
   await page.locator('.tab[data-page="report"]').click();
