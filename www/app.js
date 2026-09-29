@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v25';
+const APP_VERSION = 'v26';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -1688,52 +1688,116 @@ function fmtShare(value, total, digits = 1) {
   return `${(value / total * 100).toFixed(digits)}%`;
 }
 
-/** 從 12 點鐘方向順時針畫。夠大的塊上直接標百分比，小的看下面清單 */
-function pieSvg({ total, slices }) {
+/** 目前畫在畫面上的圓，給浮出說明查資料用。分開看時有兩個，用 data-pie 分 */
+let pieShown = [];
+
+/** 從 12 點鐘方向順時針畫。夠大的塊上直接標百分比，小的看下面清單或點一下 */
+function pieSvg(pie, p) {
+  const { total, slices } = pie;
   const R = 110;
   const at = (angle, r) => `${(R + r * Math.cos(angle)).toFixed(2)},${(R + r * Math.sin(angle)).toFixed(2)}`;
-  const title = (s) => `<title>${escapeHtml(s.name)} ${fmtShare(s.cost, total)}</title>`;
+  // 每一塊都要能被滑鼠指到、被點到、被鍵盤選到，說明的內容由 showPieTip 補
+  const attrs = (s, i) => `data-pie="${p}" data-slice="${i}" tabindex="0" fill="${s.fill}"
+    aria-label="${escapeHtml(s.name)} ${fmtShare(s.cost, total)}"`;
 
   if (slices.length === 1) {
     const s = slices[0];
-    return `<svg class="pie" viewBox="0 0 220 220" role="img" aria-label="投入佔比">
-      <circle cx="${R}" cy="${R}" r="${R}" fill="${s.fill}">${title(s)}</circle>
-      <text x="${R}" y="${R}" text-anchor="middle" dominant-baseline="central" fill="${s.ink}">100%</text>
+    s.mid = -Math.PI / 2;
+    s.tipR = 0;
+    return `<svg class="pie" viewBox="0 0 220 220" role="group" aria-label="投入佔比">
+      <circle cx="${R}" cy="${R}" r="${R}" ${attrs(s, 0)}></circle>
+      <text x="${R}" y="${R}" text-anchor="middle" dominant-baseline="central" fill="${s.ink}" data-slice="0">100%</text>
     </svg>`;
   }
 
   let angle = -Math.PI / 2;
   let body = '';
-  for (const s of slices) {
+  slices.forEach((s, i) => {
     const sweep = (s.cost / total) * Math.PI * 2;
     const end = angle + sweep;
     const large = sweep > Math.PI ? 1 : 0;
-    body += `<path d="M${R},${R} L${at(angle, R)} A${R},${R} 0 ${large} 1 ${at(end, R)} Z" fill="${s.fill}">${title(s)}</path>`;
+    s.mid = angle + sweep / 2;
+    s.tipR = R * 0.64;
+    body += `<path d="M${R},${R} L${at(angle, R)} A${R},${R} 0 ${large} 1 ${at(end, R)} Z" ${attrs(s, i)}></path>`;
     if (s.cost / total >= 0.06) {
-      const mid = angle + sweep / 2;
-      const [x, y] = at(mid, R * 0.64).split(',');
-      body += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" fill="${s.ink}">${fmtShare(s.cost, total, 0)}</text>`;
+      const [x, y] = at(s.mid, s.tipR).split(',');
+      body += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" fill="${s.ink}" data-slice="${i}">${fmtShare(s.cost, total, 0)}</text>`;
     }
     angle = end;
-  }
-  return `<svg class="pie" viewBox="0 0 220 220" role="img" aria-label="投入佔比">${body}</svg>`;
+  });
+  return `<svg class="pie" viewBox="0 0 220 220" role="group" aria-label="投入佔比">${body}</svg>`;
 }
 
-function pieListHtml({ total, slices, folded }) {
-  const row = (s) => `
-    <div class="pie-row">
+function pieListHtml({ total, slices, folded }, p) {
+  const row = (s, i) => `
+    <div class="pie-row" data-pie="${p}" data-slice="${i}">
       <i style="background:${s.fill}"></i>
       <span>${escapeHtml(s.name)}</span>
       <strong>${fmtMoney(s.cost)}</strong>
       <em>${fmtShare(s.cost, total)}</em>
     </div>`;
   const sub = (r) => `
-    <div class="pie-row pie-row--sub">
+    <div class="pie-row pie-row--sub" data-pie="${p}" data-sub>
       <span>${escapeHtml(r.name)}</span>
       <strong>${fmtMoney(r.cost)}</strong>
       <em>${fmtShare(r.cost, total)}</em>
     </div>`;
   return `<div class="pie-list">${slices.map(row).join('')}${folded.map(sub).join('')}</div>`;
+}
+
+/**
+ * 指到（或點到）某一塊：浮出名稱、金額、%，其他塊變淡，清單裡那一列亮起來。
+ * 小塊上面沒標字，這是唯一能直接從圖上知道「這塊是誰」的方式。
+ */
+function showPieTip(p, i) {
+  hidePieTip();
+  const pie = pieShown[p];
+  const s = pie && pie.slices[i];
+  if (!s) return;
+
+  const box = $('rp-pie');
+  const svg = box.querySelector(`.pie[data-index="${p}"]`);
+  svg.classList.add('has-hot');
+  for (const el of box.querySelectorAll(`[data-pie="${p}"][data-slice="${i}"], .pie[data-index="${p}"] text[data-slice="${i}"]`)) {
+    el.classList.add('is-hot');
+  }
+  if (s.other) {
+    for (const el of box.querySelectorAll(`.pie-row--sub[data-pie="${p}"]`)) el.classList.add('is-hot');
+  }
+
+  const names = s.other
+    ? `<span class="pie-tip__sub">${pie.folded.map((r) => escapeHtml(r.name)).join('、')}</span>`
+    : '';
+  const tip = document.createElement('div');
+  tip.className = 'pie-tip';
+  tip.id = 'pie-tip';
+  tip.innerHTML = `
+    <span class="pie-tip__name"><i style="background:${s.fill}"></i>${escapeHtml(s.name)}</span>
+    <strong>${fmtMoney(s.cost)}</strong><span class="pie-tip__pct">${fmtShare(s.cost, pie.total)}</span>
+    ${names}`;
+  box.appendChild(tip);
+
+  // 錨在那一塊的外緣：上半圈的框往上長、下半圈的往下長，才不會蓋住被指到的那塊。
+  // 只有一整塊（100%）時沒有方向，放在圓的上方
+  const r = svg.getBoundingClientRect();
+  const scale = r.width / 220;
+  const reach = pie.slices.length === 1 ? 110 : 116;
+  const ax = r.left + (110 + reach * Math.cos(s.mid)) * scale;
+  const ay = r.top + (110 + reach * Math.sin(s.mid)) * scale;
+  const below = pie.slices.length > 1 && Math.sin(s.mid) > 0.2;
+  tip.classList.toggle('pie-tip--below', below);
+
+  const b = box.getBoundingClientRect();
+  const half = tip.offsetWidth / 2;
+  const x = Math.min(Math.max(ax - b.left, half), b.width - half);
+  tip.style.left = `${x}px`;
+  tip.style.top = `${ay - b.top + (below ? 4 : -4)}px`;
+}
+
+function hidePieTip() {
+  const box = $('rp-pie');
+  $('pie-tip')?.remove();
+  for (const el of box.querySelectorAll('.is-hot, .has-hot')) el.classList.remove('is-hot', 'has-hot');
 }
 
 /**
@@ -1746,6 +1810,11 @@ function renderPie(split) {
   if (!items.length) return;
 
   const total = items.reduce((s, r) => s + r.cost, 0);
+  pieShown = [];
+  const draw = (pie) => {
+    const p = pieShown.push(pie) - 1;
+    return pieSvg(pie, p).replace('<svg class="pie"', `<svg class="pie" data-index="${p}"`) + pieListHtml(pie, p);
+  };
   const costOf = (type) => items.filter((r) => r.type === type).reduce((s, r) => s + r.cost, 0);
 
   if (!split) {
@@ -1757,7 +1826,7 @@ function renderPie(split) {
         <span><i class="legend__swatch legend__swatch--etf"></i>ETF ${fmtShare(costOf(ETF), total)}</span>
         <span><i class="legend__swatch legend__swatch--fund"></i>基金 ${fmtShare(costOf(FUND), total)}</span>
       </div>` : ''}
-      ${pieSvg(pie)}${pieListHtml(pie)}`;
+      ${draw(pie)}`;
     return;
   }
 
@@ -1772,7 +1841,7 @@ function renderPie(split) {
           <span>${type}</span>
           <small>${fmtMoney(pie.total)} · 佔全部 ${fmtShare(pie.total, total)}</small>
         </div>
-        ${pieSvg(pie)}${pieListHtml(pie)}
+        ${draw(pie)}
       </div>`;
   }).join('');
 }
@@ -3549,7 +3618,7 @@ function exportDividends() {
 
 function applyTheme() {
   // 照片主題是自己一種底，不跟著系統的明暗走
-  const PHOTO_THEMES = { haze: '#16241c', forest: '#1a2a22' };
+  const PHOTO_THEMES = { haze: '#16241c', forest: '#1a2a22', pink: '#f7dcdc' };
   if (PHOTO_THEMES[state.theme]) {
     document.documentElement.dataset.theme = state.theme;
     $('theme-color').setAttribute('content', PHOTO_THEMES[state.theme]);
@@ -3689,6 +3758,45 @@ function bindEvents() {
     state.reportSplit = btn.dataset.mode === 'split';
     try { localStorage.setItem(LS.reportSplit, state.reportSplit ? '1' : '0'); } catch (err) { /* 無妨 */ }
     renderReport();
+  });
+
+  // ---- 報表頁：投入佔比的浮出說明 ----
+  // 滑鼠：指到就出現、移開就收。手機：點一下出現、點空白處收。鍵盤：Tab 到那一塊
+  let piePointer = 'mouse';
+  const pieTarget = (e) => e.target.closest('.pie [data-slice]');
+  const sliceOf = (el) => {
+    const svg = el.closest('.pie');
+    return [Number(svg.dataset.index), Number(el.dataset.slice)];
+  };
+  $('rp-pie').addEventListener('pointerover', (e) => {
+    const el = pieTarget(e);
+    if (e.pointerType === 'mouse' && el) showPieTip(...sliceOf(el));
+  });
+  $('rp-pie').addEventListener('pointerout', (e) => {
+    if (e.pointerType !== 'mouse' || !pieTarget(e)) return;
+    if (!e.relatedTarget || !e.relatedTarget.closest('.pie [data-slice]')) hidePieTip();
+  });
+  document.addEventListener('pointerdown', (e) => { piePointer = e.pointerType; });
+  document.addEventListener('click', (e) => {
+    const el = pieTarget(e);
+    if (!el) {
+      if (!e.target.closest('#pie-tip')) hidePieTip();
+      return;
+    }
+    if (piePointer === 'mouse') return;   // 滑鼠已經靠 hover 顯示了
+    const [p, i] = sliceOf(el);
+    const same = el.classList.contains('is-hot') || $('rp-pie').querySelector(`.pie[data-index="${p}"] [data-slice="${i}"].is-hot`);
+    if (same) hidePieTip();
+    else showPieTip(p, i);
+  });
+  // 只接鍵盤的焦點：手指點下去也會讓那塊拿到焦點，要是這裡也打開，
+  // 緊接著的 click 會以為「點了已經打開的那塊」又把它關掉
+  $('rp-pie').addEventListener('focusin', (e) => {
+    const el = pieTarget(e);
+    if (el && el.matches(':focus-visible')) showPieTip(...sliceOf(el));
+  });
+  $('rp-pie').addEventListener('focusout', (e) => {
+    if (pieTarget(e)) hidePieTip();
   });
 
   // ---- 持股頁 ----

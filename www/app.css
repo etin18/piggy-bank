@@ -341,6 +341,107 @@
   --radius-sm: 18px;
 }
 
+/* 粉色：唯一一個「亮的」照片主題。
+   霧霾和森林都是把照片壓暗、配白字；這張是整片淺粉、東西少又大片留白，
+   壓暗就不粉了。所以反過來：奶白的霧面玻璃配深可可色字。
+   元件結構跟另外兩個共用，只是那些寫死成白色的地方都改吃變數（見檔案後段）。 */
+:root[data-theme="pink"] {
+  color-scheme: light;
+
+  --page:           #fbecec;
+  --surface-1:      rgba(255,255,255,.62);
+  --surface-2:      rgba(255,236,240,.80);
+  /* 字也要粉：莓果紅當主字、玫瑰粉當次要字。原本的可可棕讀起來穩，
+     但放在粉色照片上整頁不夠粉嫩。奶油卡片上的對比 8.3／5.2／3.6 */
+  --text-primary:   #7c2d52;
+  --text-secondary: #a24a74;
+  --muted:          #b8678c;
+  --border:         rgba(124,45,82,.14);
+  --shadow:         0 8px 24px rgba(160,70,90,.14);
+  --shadow-lift:    0 12px 32px rgba(150,60,85,.24);
+
+  /* 選中與主要動作：螢光筆那支桃紅。白字壓在上面 3.9 */
+  --accent:      #d63a72;
+  --on-accent:   #ffffff;
+  --accent-deep: #b8285e;
+  --accent-weak: rgba(214,58,114,.14);
+  --accent-line: rgba(255,200,220,.90);
+  --accent-glow: rgba(214,58,114,.30);
+
+  /* ETF 粉紅 × 基金蜜桃。兩類都用粉紅的話圓餅裡分不出哪幾塊是 ETF，
+     蜜桃跟粉紅色相夠遠（13.9，綠色盲 11.3）又還是同一個粉嫩的調子。
+     ETF 的粉刻意比桃紅（選中）淡一大階，差 18 */
+  --etf:      #ee8fb0;
+  --etf-ink:  #b8407a;
+  --etf-weak: rgba(238,143,176,.18);
+  --fund:     #f0a07a;
+  --fund-ink: #b8602f;
+  --fund-weak:rgba(240,160,122,.18);
+
+  --pie-etf-a:   #b83f73;
+  --pie-etf-b:   #fbdce7;
+  --pie-fund-a:  #c8662f;
+  --pie-fund-b:  #fde6d6;
+  --pie-a-ink:   #ffffff;
+  --pie-b-ink:   #7c2d52;
+  --pie-other:   #eadcdc;
+  --pie-other-ink:#7c2d52;
+
+  /* 跟霧霾一樣不用紅漲綠跌：紅色在這一頁會跟桃紅的「選中」混在一起（只差 8.9）。
+     改成琥珀（賺）× 藍（賠），黃藍對色盲也最安全 */
+  --gain:     #a8680a;
+  --gain-weak:rgba(168,104,10,.12);
+  --loss:     #2b78a0;
+  --loss-weak:rgba(43,120,160,.12);
+
+  --danger:   #c0392b;
+  --good:     #3f7a5c;
+  --warn:     #c0392b;
+
+  --photo:        url("bg-pink.jpg");
+  --photo-dim:    none;
+  /* 奶油卡片：幾乎不透明，照片只當背景。試過霧面（.55）和水感（.28），
+     水感在筆和花上面字會花；這張照片本身就夠熱鬧，卡片安靜一點比較好讀 */
+  --glass:        rgba(255,251,250,.84);
+  --glass-face:   none;
+  --glass-line:   rgba(255,255,255,.90);
+  --glass-filter: blur(20px) saturate(120%);
+  --glass-rim:    rgba(255,255,255,.90);
+  --glass-drop:   0 8px 24px rgba(160,70,90,.16);
+  --glass-shadow:
+    inset 0 1px 0 rgba(255,255,255,.90),
+    0 6px 18px rgba(160,70,90,.10);
+  --summary-shadow:
+    inset 0 1px 1px rgba(255,255,255,.80),
+    0 10px 26px rgba(200,50,100,.26);
+  --glass-bar:    rgba(255,242,244,.86);
+  --bar-filter:   blur(20px) saturate(140%);
+  --sheet-bg:     linear-gradient(180deg, rgba(255,246,247,.97) 0%, rgba(252,236,239,.98) 100%);
+  --summary-bg:
+    linear-gradient(135deg, rgba(229,84,137,.92) 0%, rgba(214,58,114,.86) 100%);
+  --summary-line: rgba(255,210,226,.80);
+  --summary-ink:  #ffffff;
+
+  /* 另外兩個照片主題寫死成白色的地方，在亮底上要換成深色系 */
+  --bar-sheen:    linear-gradient(180deg, rgba(255,255,255,.55) 0%, rgba(255,255,255,.10) 100%);
+  --glass-rule:   rgba(120,60,75,.12);
+  --input-bg:     rgba(255,255,255,.75);
+  --input-bg-focus: #ffffff;
+  --input-line:   rgba(120,60,75,.22);
+  --input-ink:    #7c2d52;
+  --input-ph:     rgba(162,74,116,.50);
+  --chip-bg:      rgba(255,255,255,.55);
+  --chip-line:    rgba(120,60,75,.16);
+  --seg-bg:       rgba(120,60,75,.08);
+  --seg-on:       #ffffff;
+  --seg-on-ink:   #7c2d52;
+  --scrim:        rgba(80,30,45,.40);
+  --sheet-drop:   0 -12px 40px rgba(120,40,65,.25);
+
+  --radius:    20px;
+  --radius-sm: 14px;
+}
+
 * { box-sizing: border-box; }
 
 /* .sheet、.chips、.field 這些都自帶 display，優先度高過瀏覽器預設的 [hidden]。
@@ -719,7 +820,10 @@ button, input, select, textarea {
 
 .entry__body { flex: 1; min-width: 0; }
 
+/* 名稱和說明是 <span>，要當成區塊才吃得到 overflow／ellipsis。
+   行內的話說明會整行穿出去，跑到金額底下跟它疊在一起 */
 .entry__name {
+  display: block;
   font-size: 15px;
   font-weight: 600;
   white-space: nowrap;
@@ -728,11 +832,14 @@ button, input, select, textarea {
 }
 
 .entry__meta {
+  display: block;
   font-size: 12.5px;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* 說明可以換行：明細頁包在卡片裡比較窄，截成「…」的話
+     「定期定額／自己下單」正好是被切掉的那段。
+     keep-all 讓中文詞不會被從中間拆開，只在空白處（「·」兩側）換行 */
+  line-height: 1.45;
+  word-break: keep-all;
 }
 
 .entry__amount {
@@ -1245,7 +1352,51 @@ button, input, select, textarea {
 .pie path, .pie circle { stroke: var(--surface-1); stroke-width: 2; stroke-linejoin: round; }
 :root[data-theme="haze"] .pie path,
 :root[data-theme="forest"] .pie path { stroke: rgba(0,0,0,.28); stroke-width: 1.5; }
-.pie text { font-size: 11px; font-weight: 700; }
+.pie text { font-size: 11px; font-weight: 700; pointer-events: none; }
+.pie [tabindex] { cursor: pointer; outline: none; transition: opacity .15s; }
+
+/* 指到某一塊：其他塊退後，那塊和清單裡那一列亮著 */
+.pie.has-hot path:not(.is-hot),
+.pie.has-hot text:not(.is-hot) { opacity: .35; }
+.pie-row { border-radius: 8px; transition: background .15s; }
+.pie-row.is-hot { background: var(--surface-2); box-shadow: 0 0 0 6px var(--surface-2); }
+
+#rp-pie { position: relative; }
+
+/* 浮出說明：反色的小框，四個主題都用「字色當底、頁面色當字」，
+   不管底下是白卡、深卡還是照片都浮得起來 */
+.pie-tip {
+  position: absolute;
+  z-index: 5;
+  transform: translate(-50%, -100%);
+  max-width: 240px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--text-primary);
+  color: var(--page);
+  box-shadow: var(--shadow-lift);
+  font-size: 13px;
+  line-height: 1.45;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.pie-tip--below { transform: translate(-50%, 0); }
+.pie-tip__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.pie-tip__name i {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(127,127,127,.5);
+}
+.pie-tip strong { font-size: 15px; margin-right: 6px; }
+.pie-tip__pct { opacity: .7; }
+.pie-tip__sub { display: block; margin-top: 2px; font-size: 12px; opacity: .7; }
 
 .pie-list { margin-top: 6px; }
 .pie-row {
@@ -2339,7 +2490,7 @@ select.input {
 }
 
 /* ==========================================================================
-   照片主題的元件（霧霾＋森林共用）
+   照片主題的元件（霧霾、森林、粉色共用）
 
    變數在檔案最上面，每個主題各填一組。這裡只定義「結構」：
 
@@ -2353,9 +2504,9 @@ select.input {
    （霧霾的 blur 只有 2px，拿掉幾乎看不出差別，但少了幾十個合成層）。
    ========================================================================== */
 
-:is([data-theme="haze"], [data-theme="forest"]) body { background: transparent; }
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) body { background: transparent; }
 
-:is([data-theme="haze"], [data-theme="forest"]) body::before {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) body::before {
   content: '';
   position: fixed;
   inset: 0;
@@ -2366,7 +2517,7 @@ select.input {
 }
 
 /* 壓暗層。照片越亮要壓越多，不然白字會糊在上面 */
-:is([data-theme="haze"], [data-theme="forest"]) body::after {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) body::after {
   content: '';
   position: fixed;
   inset: 0;
@@ -2375,19 +2526,19 @@ select.input {
 }
 
 /* 所有會浮起來的東西都是同一塊玻璃 */
-:is([data-theme="haze"], [data-theme="forest"]) .card,
-:is([data-theme="haze"], [data-theme="forest"]) .entry,
-:is([data-theme="haze"], [data-theme="forest"]) .action,
-:is([data-theme="haze"], [data-theme="forest"]) .picker__btn,
-:is([data-theme="haze"], [data-theme="forest"]) .alert,
-:is([data-theme="haze"], [data-theme="forest"]) .alert__item,
-:is([data-theme="haze"], [data-theme="forest"]) .hold,
-:is([data-theme="haze"], [data-theme="forest"]) .sync-chip,
-:is([data-theme="haze"], [data-theme="forest"]) .more,
-:is([data-theme="haze"], [data-theme="forest"]) .totals,
-:is([data-theme="haze"], [data-theme="forest"]) .yearbar__btn,
-:is([data-theme="haze"], [data-theme="forest"]) .icon-btn--tool,
-:is([data-theme="haze"], [data-theme="forest"]) .btn {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .card,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .entry,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .action,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .picker__btn,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .alert,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .alert__item,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .hold,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .sync-chip,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .more,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .totals,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .yearbar__btn,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .icon-btn--tool,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .btn {
   background-color: var(--glass);
   background-image: var(--glass-face);
   border: 1px solid var(--glass-line);
@@ -2398,25 +2549,25 @@ select.input {
 }
 
 /* 列表項目小一號，圓角跟著收 */
-:is([data-theme="haze"], [data-theme="forest"]) .entry,
-:is([data-theme="haze"], [data-theme="forest"]) .alert__item,
-:is([data-theme="haze"], [data-theme="forest"]) .hold {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .entry,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .alert__item,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .hold {
   border-radius: var(--radius-sm);
 }
 
 /* 小元件一律膠囊 */
-:is([data-theme="haze"], [data-theme="forest"]) .entry__tag,
-:is([data-theme="haze"], [data-theme="forest"]) .action__mark,
-:is([data-theme="haze"], [data-theme="forest"]) .sync-chip,
-:is([data-theme="haze"], [data-theme="forest"]) .chip,
-:is([data-theme="haze"], [data-theme="forest"]) .seg__btn,
-:is([data-theme="haze"], [data-theme="forest"]) .yearbar__btn {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .entry__tag,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .action__mark,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .sync-chip,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .chip,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .seg__btn,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .yearbar__btn {
   border-radius: 999px;
 }
 
 /* 摘要卡：金色要留著（那是配息的識別），但字得轉白 ——
    淺色主題那套深棕字壓在暗玻璃上等於消失 */
-:is([data-theme="haze"], [data-theme="forest"]) .summary {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .summary {
   background: var(--summary-bg);
   border: 1px solid var(--summary-line);
   border-radius: var(--radius);
@@ -2425,50 +2576,50 @@ select.input {
   -webkit-backdrop-filter: var(--glass-filter);
   box-shadow: var(--summary-shadow);
 }
-:is([data-theme="haze"], [data-theme="forest"]) .summary__label { opacity: .92; }
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .summary__label { opacity: .92; }
 
 /* 頂欄與分頁列：一樣是玻璃，但底下有整頁內容捲過去。
    太透的話下面那行字會穿出來跟分頁標籤疊在一起，所以 tint 濃一階、blur 也重 */
-:is([data-theme="haze"], [data-theme="forest"]) .topbar,
-:is([data-theme="haze"], [data-theme="forest"]) .tabbar {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .topbar,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .tabbar {
   background:
-    linear-gradient(180deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.04) 100%),
+    var(--bar-sheen, linear-gradient(180deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.04) 100%)),
     var(--glass-bar);
   backdrop-filter: var(--bar-filter);
   -webkit-backdrop-filter: var(--bar-filter);
   border-color: var(--glass-line);
 }
-:is([data-theme="haze"], [data-theme="forest"]) .tabbar {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .tabbar {
   box-shadow: inset 0 1px 1px var(--glass-rim), var(--glass-drop);
 }
 
 /* 持股頁本來是透明列＋分隔線，在照片上會整片糊掉，改成一列一片玻璃。
    但那一列的左右內距原本只有 2px —— 沒有框的時候內容對齊頁面邊界是對的，
    一旦包進玻璃卡片，展開箭頭和金額就會貼在框上。 */
-:is([data-theme="haze"], [data-theme="forest"]) .hold { margin-bottom: 9px; }
-:is([data-theme="haze"], [data-theme="forest"]) .hold + .hold {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .hold { margin-bottom: 9px; }
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .hold + .hold {
   border-top: 1px solid var(--glass-line);
 }
-:is([data-theme="haze"], [data-theme="forest"]) .hold__row,
-:is([data-theme="haze"], [data-theme="forest"]) .hold__detail {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .hold__row,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .hold__detail {
   padding-left: 14px;
   padding-right: 14px;
 }
 
 /* 圓的東西要維持圓，不能被卡片圓角接管 */
-:is([data-theme="haze"], [data-theme="forest"]) .icon-btn--tool { border-radius: 50%; }
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .icon-btn--tool { border-radius: 50%; }
 
 /* 分隔線在玻璃上要淡，不然像刻痕 */
-:is([data-theme="haze"], [data-theme="forest"]) .card__rule,
-:is([data-theme="haze"], [data-theme="forest"]) .cmp__rule {
-  background: rgba(255,255,255,.14);
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .card__rule,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .cmp__rule {
+  background: var(--glass-rule, rgba(255,255,255,.14));
 }
 
 /* 表單面板是唯一不做通透的地方。
    它蓋在整頁內容上面，玻璃會讓底下的清單直接穿上來跟欄位疊在一起，
    填數字的時候根本看不清楚自己在填哪一格。
    所以底色給到 .94 以上，只留邊緣的高光維持同一套語彙。 */
-:is([data-theme="haze"], [data-theme="forest"]) .sheet {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .sheet {
   background: var(--sheet-bg);
   border: 1px solid var(--glass-line);
   border-bottom: 0;
@@ -2477,30 +2628,30 @@ select.input {
   -webkit-backdrop-filter: blur(24px) saturate(150%);
   box-shadow:
     inset 0 1px 1px var(--glass-rim),
-    0 -12px 40px rgba(0,0,0,.5);
+    var(--sheet-drop, 0 -12px 40px rgba(0,0,0,.5));
 }
 
 /* 表單：輸入框不能是玻璃 —— 要填字的地方得看得出邊界在哪 */
-:is([data-theme="haze"], [data-theme="forest"]) .input {
-  background: rgba(255,255,255,.10);
-  border-color: rgba(255,255,255,.32);
-  color: #fff;
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .input {
+  background: var(--input-bg, rgba(255,255,255,.10));
+  border-color: var(--input-line, rgba(255,255,255,.32));
+  color: var(--input-ink, #fff);
 }
-:is([data-theme="haze"], [data-theme="forest"]) .input:focus {
-  background: rgba(255,255,255,.16);
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .input:focus {
+  background: var(--input-bg-focus, rgba(255,255,255,.16));
   border-color: var(--accent);
 }
-:is([data-theme="haze"], [data-theme="forest"]) .input::placeholder {
-  color: rgba(255,255,255,.45);
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .input::placeholder {
+  color: var(--input-ph, rgba(255,255,255,.45));
 }
 
 /* 篩選膠囊：沒選中的那些原本吃 --page 的實色，
    在一片玻璃裡會變成突兀的色塊，所以也給玻璃 */
-:is([data-theme="haze"], [data-theme="forest"]) .chip {
-  background: rgba(255,255,255,.08);
-  border-color: rgba(255,255,255,.28);
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .chip {
+  background: var(--chip-bg, rgba(255,255,255,.08));
+  border-color: var(--chip-line, rgba(255,255,255,.28));
 }
-:is([data-theme="haze"], [data-theme="forest"]) .seg { background: rgba(255,255,255,.10); }
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .seg { background: var(--seg-bg, rgba(255,255,255,.10)); }
 
 /* ── 亮起來的狀態 ──────────────────────────────────────────────────
    上面那條玻璃規則把 .btn 和 .yearbar__btn 一起收編了，
@@ -2508,10 +2659,10 @@ select.input {
    全變成跟旁邊一樣的玻璃，看不出被按下或選中。
 
    在玻璃底上，**實心金色才是「這顆亮著」的訊號**——半透明一律讀成「沒選」。 */
-:is([data-theme="haze"], [data-theme="forest"]) .chip.is-active,
-:is([data-theme="haze"], [data-theme="forest"]) .yearbar__btn.is-active,
-:is([data-theme="haze"], [data-theme="forest"]) .btn--primary,
-:is([data-theme="haze"], [data-theme="forest"]) .btn--submit {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .chip.is-active,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .yearbar__btn.is-active,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .btn--primary,
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .btn--submit {
   background: var(--accent);
   border-color: var(--accent-line);
   color: var(--on-accent);
@@ -2522,14 +2673,14 @@ select.input {
 }
 
 /* 合計／分開看這種段落切換沒有金色，選中的那顆就靠「比容器亮」來分辨 */
-:is([data-theme="haze"], [data-theme="forest"]) .seg__btn.is-active {
-  background: rgba(255,255,255,.26);
-  color: #fff;
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .seg__btn.is-active {
+  background: var(--seg-on, rgba(255,255,255,.26));
+  color: var(--seg-on-ink, #fff);
   box-shadow: inset 0 1px 1px rgba(255,255,255,.50);
 }
 
 /* 刪除是危險動作，維持透明紅字，不要被玻璃收編 */
-:is([data-theme="haze"], [data-theme="forest"]) .btn--danger {
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .btn--danger {
   background: transparent;
   border-color: var(--danger);
   color: var(--danger);
@@ -2537,7 +2688,7 @@ select.input {
 }
 
 /* 面板背後的遮罩要更暗，照片本來就亮 */
-:is([data-theme="haze"], [data-theme="forest"]) .scrim { background: rgba(4,12,8,.58); }
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .scrim { background: var(--scrim, rgba(4,12,8,.58)); }
 
 /* 遮住金額時，眼睛本身要看得出是「開著的狀態」——
    不然畫面全是 $••• 卻不知道怎麼切回來 */
@@ -2552,3 +2703,58 @@ select.input {
 .eye--shut { display: none; }
 .icon-btn.is-on .eye--open { display: none; }
 .icon-btn.is-on .eye--shut { display: block; }
+
+/* 粉色主題：ETF／基金的小圓點換成愛心。
+   用 mask 把形狀挖出來，顏色還是吃原本的 --etf／--fund，
+   所以只要在這裡改形狀，不用動任何一處畫點點的程式。
+   愛心比圓點「空」，同樣大小看起來會小一號，所以放大到 10px。
+   （::before 不能寫進 :is()，會讓整條規則失效，所以三個分開列） */
+:root[data-theme="pink"] .hold__name::before,
+:root[data-theme="pink"] .legend__swatch--etf,
+:root[data-theme="pink"] .legend__swatch--fund {
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+  -webkit-mask: var(--heart) center / contain no-repeat;
+          mask: var(--heart) center / contain no-repeat;
+}
+:root[data-theme="pink"] {
+  --heart: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21.2 10.6 20C5.4 15.3 2 12.2 2 8.4 2 5.3 4.4 3 7.5 3c1.7 0 3.4.8 4.5 2.1C13.1 3.8 14.8 3 16.5 3 19.6 3 22 5.3 22 8.4c0 3.8-3.4 6.9-8.6 11.6z'/%3E%3C/svg%3E");
+}
+:root[data-theme="pink"] .pie-mix .legend__swatch { vertical-align: -1px; }
+
+/* 直接壓在照片上、沒有卡片墊底的字。玫瑰粉的 --muted 放在粉色照片上只剩 2.4
+   （同色系疊同色系），改用主字色，再加一圈淡白光把字從照片上托起來 */
+:root[data-theme="pink"] .section-title,
+:root[data-theme="pink"] .hold-group__title,
+:root[data-theme="pink"] .quote-bar__hint {
+  color: var(--text-primary);
+  text-shadow: 0 0 6px rgba(255,255,255,.85), 0 0 2px rgba(255,255,255,.9);
+}
+
+/* 粉色主題：買賣、配息、出入金的標籤換成愛心系列的圖示。
+   圖示是 Google Material Symbols（Apache 2.0），四個 path 直接內嵌，
+   不另外載入圖示字型 —— 為了四個圖示多一個網路請求不划算，離線也要看得到。
+   標籤裡原本的字（買／賣／息／⇅）留著給讀螢幕的軟體念，只是縮成 0 看不到；
+   圖示用 mask 挖形狀、底色吃 currentColor，所以顏色還是原本那一套 */
+:root[data-theme="pink"] {
+  --ico-buy:  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M440-501Zm0 381L313-234q-72-65-123.5-116t-85-96q-33.5-45-49-87T40-621q0-94 63-156.5T260-840q52 0 99 22t81 62q34-40 81-62t99-22q81 0 136 45.5T831-680h-85q-18-40-53-60t-73-20q-51 0-88 27.5T463-660h-46q-31-45-70.5-72.5T260-760q-57 0-98.5 39.5T120-621q0 33 14 67t50 78.5q36 44.5 98 104T440-228q26-23 61-53t56-50l9 9 19.5 19.5L605-283l9 9q-22 20-56 49.5T498-172l-58 52Zm280-160v-120H600v-80h120v-120h80v120h120v80H800v120h-80Z'/%3E%3C/svg%3E");
+  --ico-sell: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M440-501Zm0 381L313-234q-72-65-123.5-116t-85-96q-33.5-45-49-87T40-621q0-94 63-156.5T260-840q52 0 99 22t81 62q34-40 81-62t99-22q84 0 153 59t69 160q0 14-2 29.5t-6 31.5h-85q5-18 8-34t3-30q0-75-50-105.5T620-760q-51 0-88 27.5T463-660h-46q-31-45-70.5-72.5T260-760q-57 0-98.5 39.5T120-621q0 33 14 67t50 78.5q36 44.5 98 104T440-228q26-23 61-53t56-50l9 9 19.5 19.5L605-283l9 9q-22 20-56 49.5T498-172l-58 52Zm160-280v-80h320v80H600Z'/%3E%3C/svg%3E");
+  --ico-div:  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M300-840q52 0 99 22t81 62q34-40 81-62t99-22q94 0 157 63t63 157q0 5-.5 10t-.5 10h-80q1-5 1-10v-10q0-60-40-100t-100-40q-47 0-87 26.5T518-666h-76q-15-41-55-67.5T300-760q-60 0-100 40t-40 100v10q0 5 1 10H81q0-5-.5-10t-.5-10q0-94 63-157t157-63Zm-88 480h112q32 31 70 67t86 79q48-43 86-79t70-67h113q-38 42-90 91T538-158l-58 52-58-52q-69-62-120.5-111T212-360Zm230 40q13 0 22.5-7.5T478-347l54-163 35 52q5 8 14 13t19 5h320v-80H623l-69-102q-6-9-15.5-13.5T518-640q-13 0-22.5 7.5T482-613l-54 162-34-51q-5-8-14-13t-19-5H40v80h297l69 102q6 9 15.5 13.5T442-320Zm38-167Z'/%3E%3C/svg%3E");
+  --ico-cash: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -960 960 960'%3E%3Cpath d='M160-240v-320 13-173 480Zm556 100L576-280q-13-13-18.5-28t-5.5-30q0-32 23-57t59-25q28 0 44 13t38 35q20-20 36.5-34t45.5-14q37 0 59.5 25.5T880-337q0 15-6 30t-18 27L716-140ZM160-640h640v-80H160v80Zm303 480H160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h640q33 0 56.5 23.5T880-720v213q-35-25-76.5-39T716-560q-57 0-107.5 21.5T520-480H160v240h279q3 21 9 41t15 39Z'/%3E%3C/svg%3E");
+}
+:root[data-theme="pink"] .entry__tag,
+:root[data-theme="pink"] .action__mark { font-size: 0; }
+:root[data-theme="pink"] .entry__tag::before,
+:root[data-theme="pink"] .action__mark::before {
+  content: '';
+  width: 20px;
+  height: 20px;
+  background: currentColor;
+  -webkit-mask: var(--ico) center / contain no-repeat;
+          mask: var(--ico) center / contain no-repeat;
+}
+:root[data-theme="pink"] :is(.entry__tag--buy,  .action__mark--buy)  { --ico: var(--ico-buy); }
+:root[data-theme="pink"] :is(.entry__tag--sell, .action__mark--sell) { --ico: var(--ico-sell); }
+:root[data-theme="pink"] :is(.entry__tag--div,  .action__mark--div)  { --ico: var(--ico-div); }
+:root[data-theme="pink"] :is(.entry__tag--cash, .action__mark--cash) { --ico: var(--ico-cash); }
