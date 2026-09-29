@@ -239,6 +239,19 @@
 
         <p class="hint" id="rp-price-hint" hidden></p>
       </div>
+
+      <!-- 投入成本裡各檔佔多少。跟著上面的「合計／分開看」走，不分年份 -->
+      <div class="card" id="rp-pie-card" hidden>
+        <h2 class="card__title">投入佔比</h2>
+        <p class="card__sub">目前持有的部位，各佔投入成本多少</p>
+        <div id="rp-pie"></div>
+
+        <label class="toggle toggle--inline">
+          <input type="checkbox" id="pie-exclude-fee">
+          <span class="toggle__box" aria-hidden="true"></span>
+          <span>投入成本不含手續費</span>
+        </label>
+      </div>
     </section>
 
     <!-- ---------- 分頁 3：持股 ---------- -->

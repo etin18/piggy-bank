@@ -40,6 +40,17 @@
   --fund-ink: #6c4494;
   --fund-weak:#f1eaf8;
 
+  /* 投入佔比的圓餅：ETF、基金各用自己那個顏色的深淺，最大的一塊在 a 端。
+     a-ink／b-ink 是塊上百分比的字色，看那一端是深是淺 */
+  --pie-etf-a:   #216187;
+  --pie-etf-b:   #d6e8f4;
+  --pie-fund-a:  #6c4494;
+  --pie-fund-b:  #e7dbf3;
+  --pie-a-ink:   #ffffff;
+  --pie-b-ink:   #2a2620;
+  --pie-other:   #d6cfc2;
+  --pie-other-ink:#2a2620;
+
   /* 台股慣例：紅漲綠跌 */
   --gain:     #cc4436;
   --gain-weak:#fbeae8;
@@ -84,6 +95,15 @@
   --fund:     #a684c8;
   --fund-ink: #c7abe2;
   --fund-weak:#332a3e;
+
+  --pie-etf-a:   #93c9e8;
+  --pie-etf-b:   #2f5a78;
+  --pie-fund-a:  #c7abe2;
+  --pie-fund-b:  #5b4078;
+  --pie-a-ink:   #1d1a16;
+  --pie-b-ink:   #ffffff;
+  --pie-other:   #5a544b;
+  --pie-other-ink:#ffffff;
 
   --gain:     #ec6b5c;
   --gain-weak:#3d2320;
@@ -158,6 +178,15 @@
   --fund:     #8ecf7a;
   --fund-ink: #b0dd9c;
   --fund-weak:rgba(142,207,122,.20);
+
+  --pie-etf-a:   #d6ecfa;
+  --pie-etf-b:   #5f95bd;
+  --pie-fund-a:  #d5efc8;
+  --pie-fund-b:  #5c9a4a;
+  --pie-a-ink:   #1f2a24;
+  --pie-b-ink:   #ffffff;
+  --pie-other:   rgba(255,255,255,.34);
+  --pie-other-ink:#ffffff;
 
   /* 霧霾不用台股的紅漲綠跌，改成金黃（賺）× 天藍（賠）。
      紅配綠在色盲下只差 19.9／17.0，黃配藍是 76.7／89.5 —— 這組穩得多。
@@ -260,6 +289,15 @@
   --fund-ink: #9ad98a;
   --fund-weak:rgba(95,184,119,.22);
 
+  --pie-etf-a:   #fff0a8;
+  --pie-etf-b:   #b8900c;
+  --pie-fund-a:  #c9f0b8;
+  --pie-fund-b:  #3f8a55;
+  --pie-a-ink:   #2a2620;
+  --pie-b-ink:   #ffffff;
+  --pie-other:   rgba(255,255,255,.30);
+  --pie-other-ink:#ffffff;
+
   --gain:     #ff8a7a;
   --gain-weak:rgba(255,138,122,.20);
   --loss:     #6ddba0;
@@ -335,7 +373,7 @@ button, input, select, textarea {
 /* 數字一律等寬對齊，金額上下排在一起才不會跳動 */
 .num, .summary__value, .summary__sub, .stat__value, .entry__amount,
 .hold__num, .totals__row strong, .kv strong, .split__item strong,
-.chart__value, .cmp__row, .gcol__peak, .range, .tally__row, .tally-cmp {
+.chart__value, .cmp__row, .gcol__peak, .range, .tally__row, .tally-cmp, .pie-row {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
@@ -1094,8 +1132,10 @@ button, input, select, textarea {
 .tally-cmp--sum .tally-cmp__v { color: var(--text-primary); }
 .tally-cmp--sum .tally-cmp__v.is-in { color: var(--gain); }
 
+/* 欄寬要鎖在容器寬度：預設的 auto 欄會被最長那一列的說明撐開，整頁變成可以左右滑 */
 .ledger-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin-top: 11px;
 }
@@ -1165,6 +1205,71 @@ button, input, select, textarea {
 }
 .legend__swatch--etf  { background: var(--etf); }
 .legend__swatch--fund { background: var(--fund); }
+
+/* ---------- 投入佔比（圓餅） ---------- */
+
+.pie-mix {
+  display: flex;
+  gap: 14px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.pie-mix .legend__swatch { border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+
+.pie-sec + .pie-sec {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+.pie-sec__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.pie-sec__head small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.pie-sec__head--etf  { color: var(--etf-ink); }
+.pie-sec__head--fund { color: var(--fund-ink); }
+
+.pie {
+  display: block;
+  width: 220px;
+  height: 220px;
+  margin: 14px auto 6px;
+  overflow: visible;
+}
+/* 塊與塊之間留一道縫，同色系的相鄰深淺才分得開 */
+.pie path, .pie circle { stroke: var(--surface-1); stroke-width: 2; stroke-linejoin: round; }
+:root[data-theme="haze"] .pie path,
+:root[data-theme="forest"] .pie path { stroke: rgba(0,0,0,.28); stroke-width: 1.5; }
+.pie text { font-size: 11px; font-weight: 700; }
+
+.pie-list { margin-top: 6px; }
+.pie-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto 52px;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.pie-row i { width: 12px; height: 12px; border-radius: 3px; }
+.pie-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pie-row strong { font-weight: 700; }
+.pie-row em { font-style: normal; text-align: right; color: var(--muted); }
+
+/* 併進「其他」的那幾檔：縮排、淡一階，沒有色塊 */
+.pie-row--sub {
+  grid-template-columns: minmax(0, 1fr) auto 52px;
+  padding: 4px 0 4px 22px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pie-row--sub strong { font-weight: 400; }
 
 /* ==========================================================================
    持股

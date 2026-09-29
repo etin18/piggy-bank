@@ -644,6 +644,15 @@ async function run() {
   await checkIn(page, 'rp-pl-cmp', EXPECT['split-etf-unreal'], 'ETF 未實現');
   await checkIn(page, 'rp-pl-cmp', EXPECT['split-fund-unreal'], '基金未實現');
 
+  // 投入佔比：分開看時每個圓的總額要等於上面那欄的投入成本，各自加起來 100%
+  await checkIn(page, 'rp-pie', EXPECT['split-etf-cost'], '佔比・ETF 總額');
+  await checkIn(page, 'rp-pie', EXPECT['split-fund-cost'], '佔比・基金總額');
+  const pieSums = await page.evaluate(() => [...document.querySelectorAll('#rp-pie .pie-sec')].map((sec) =>
+    [...sec.querySelectorAll('.pie-row:not(.pie-row--sub) em')].reduce((s, e) => s + parseFloat(e.textContent), 0)));
+  const okPieSums = pieSums.length === 2 && pieSums.every((s) => Math.abs(s - 100) <= 0.2);
+  console.log(`  ${okPieSums ? '✅' : '❌'} 佔比・兩個圓各自加起來 100%：${pieSums.map((s) => s.toFixed(1)).join(' / ')}`);
+  if (!okPieSums) problems.push(`分開看的圓餅百分比加起來不是 100：${pieSums.join(' / ')}`);
+
   // 配息率的分母要退回「那一年結束時」的部位，不能拿現在的持股去除去年的配息。
   // 直接問計算層：2025 年底時 2026 那幾筆買進都還沒發生
   const cost2025 = await page.evaluate(() => Math.round(

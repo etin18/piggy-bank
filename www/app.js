@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v24';
+const APP_VERSION = 'v25';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -1489,6 +1489,9 @@ function renderReport() {
   }
 
   $('rp-exclude-fee').checked = state.excludeFee;
+  $('pie-exclude-fee').checked = state.excludeFee;
+
+  renderPie(split);
 
   const missing = etf.missing + fund.missing;
   const hint = $('rp-price-hint');
@@ -1618,6 +1621,158 @@ function renderStackedChart(stats, currentMonth) {
           <div class="chart__seg chart__seg--fund" style="height:${fundPart}%"></div>
         </div>
         <span class="chart__label">${MONTH_LABELS[i]}</span>
+      </div>`;
+  }).join('');
+}
+
+/* ---------- 報表頁：投入佔比 ---------- */
+
+/** 佔不到這個比例的併成「其他」，不然十幾檔的細條擠在一起，塊上也標不下字 */
+const PIE_FOLD = 0.05;
+const PIE_KEEP = 5;
+
+/** 目前持有的，一檔一筆。基金的單筆和定期定額合成一塊 —— 要看的是「這一檔」佔多少 */
+function costByInstrument() {
+  const map = new Map();
+  for (const p of heldPositions()) {
+    const id = p.instrument.id;
+    const row = map.get(id) || { id, name: p.instrument.name, type: p.type, cost: 0 };
+    row.cost += p.cost;
+    map.set(id, row);
+  }
+  return [...map.values()].filter((r) => r.cost > 0);
+}
+
+/**
+ * ETF 排前、基金排後，各自由大到小。顏色是各自那一類的深淺：
+ * t = 0 是最大的那塊（a 端），越小越往 b 端。同色系是為了跟主題的 ETF／基金色一致，
+ * 合計時也一眼看得出兩邊各佔多少。
+ */
+function pieSlices(items) {
+  const total = items.reduce((s, r) => s + r.cost, 0);
+  const sorted = items.slice().sort((a, b) => (a.type === b.type
+    ? b.cost - a.cost
+    : (a.type === ETF ? -1 : 1)));
+
+  // 最大的幾檔一定自己一塊：檔數一多、每檔都不到 5% 時，才不會整個圓只剩一塊「其他」。
+  // 只有一檔太小的話也照畫，併成「其他 1 檔」反而多繞一圈
+  const top = new Set(items.slice().sort((a, b) => b.cost - a.cost).slice(0, PIE_KEEP));
+  const small = sorted.filter((r) => !top.has(r) && r.cost / total < PIE_FOLD);
+  const folded = small.length > 1 ? small : [];
+  const shown = sorted.filter((r) => !folded.includes(r));
+
+  for (const type of [ETF, FUND]) {
+    const group = shown.filter((r) => r.type === type);
+    const key = type === ETF ? 'etf' : 'fund';
+    group.forEach((r, i) => {
+      const t = group.length > 1 ? i / (group.length - 1) : 0;
+      r.fill = `color-mix(in srgb, var(--pie-${key}-a) ${Math.round((1 - t) * 100)}%, var(--pie-${key}-b))`;
+      r.ink = t < 0.5 ? 'var(--pie-a-ink)' : 'var(--pie-b-ink)';
+    });
+  }
+
+  const slices = shown.slice();
+  if (folded.length) {
+    slices.push({
+      other: true,
+      name: `其他 ${folded.length} 檔`,
+      cost: folded.reduce((s, r) => s + r.cost, 0),
+      fill: 'var(--pie-other)',
+      ink: 'var(--pie-other-ink)',
+    });
+  }
+  return { total, slices, folded };
+}
+
+function fmtShare(value, total, digits = 1) {
+  return `${(value / total * 100).toFixed(digits)}%`;
+}
+
+/** 從 12 點鐘方向順時針畫。夠大的塊上直接標百分比，小的看下面清單 */
+function pieSvg({ total, slices }) {
+  const R = 110;
+  const at = (angle, r) => `${(R + r * Math.cos(angle)).toFixed(2)},${(R + r * Math.sin(angle)).toFixed(2)}`;
+  const title = (s) => `<title>${escapeHtml(s.name)} ${fmtShare(s.cost, total)}</title>`;
+
+  if (slices.length === 1) {
+    const s = slices[0];
+    return `<svg class="pie" viewBox="0 0 220 220" role="img" aria-label="投入佔比">
+      <circle cx="${R}" cy="${R}" r="${R}" fill="${s.fill}">${title(s)}</circle>
+      <text x="${R}" y="${R}" text-anchor="middle" dominant-baseline="central" fill="${s.ink}">100%</text>
+    </svg>`;
+  }
+
+  let angle = -Math.PI / 2;
+  let body = '';
+  for (const s of slices) {
+    const sweep = (s.cost / total) * Math.PI * 2;
+    const end = angle + sweep;
+    const large = sweep > Math.PI ? 1 : 0;
+    body += `<path d="M${R},${R} L${at(angle, R)} A${R},${R} 0 ${large} 1 ${at(end, R)} Z" fill="${s.fill}">${title(s)}</path>`;
+    if (s.cost / total >= 0.06) {
+      const mid = angle + sweep / 2;
+      const [x, y] = at(mid, R * 0.64).split(',');
+      body += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" fill="${s.ink}">${fmtShare(s.cost, total, 0)}</text>`;
+    }
+    angle = end;
+  }
+  return `<svg class="pie" viewBox="0 0 220 220" role="img" aria-label="投入佔比">${body}</svg>`;
+}
+
+function pieListHtml({ total, slices, folded }) {
+  const row = (s) => `
+    <div class="pie-row">
+      <i style="background:${s.fill}"></i>
+      <span>${escapeHtml(s.name)}</span>
+      <strong>${fmtMoney(s.cost)}</strong>
+      <em>${fmtShare(s.cost, total)}</em>
+    </div>`;
+  const sub = (r) => `
+    <div class="pie-row pie-row--sub">
+      <span>${escapeHtml(r.name)}</span>
+      <strong>${fmtMoney(r.cost)}</strong>
+      <em>${fmtShare(r.cost, total)}</em>
+    </div>`;
+  return `<div class="pie-list">${slices.map(row).join('')}${folded.map(sub).join('')}</div>`;
+}
+
+/**
+ * 合計：一個圓，上面多一行 ETF／基金 各佔多少。
+ * 分開看：兩個圓，各自算到 100%，標題旁邊再寫這一類佔全部多少。
+ */
+function renderPie(split) {
+  const items = costByInstrument();
+  $('rp-pie-card').hidden = items.length === 0;
+  if (!items.length) return;
+
+  const total = items.reduce((s, r) => s + r.cost, 0);
+  const costOf = (type) => items.filter((r) => r.type === type).reduce((s, r) => s + r.cost, 0);
+
+  if (!split) {
+    const both = costOf(ETF) > 0 && costOf(FUND) > 0;
+    const pie = pieSlices(items);
+    $('rp-pie').innerHTML = `
+      <div class="kv"><span>總投入成本</span><strong>${fmtMoney(total)}</strong></div>
+      ${both ? `<div class="pie-mix">
+        <span><i class="legend__swatch legend__swatch--etf"></i>ETF ${fmtShare(costOf(ETF), total)}</span>
+        <span><i class="legend__swatch legend__swatch--fund"></i>基金 ${fmtShare(costOf(FUND), total)}</span>
+      </div>` : ''}
+      ${pieSvg(pie)}${pieListHtml(pie)}`;
+    return;
+  }
+
+  $('rp-pie').innerHTML = [ETF, FUND].map((type) => {
+    const group = items.filter((r) => r.type === type);
+    if (!group.length) return '';
+    const pie = pieSlices(group);
+    const cls = type === ETF ? 'etf' : 'fund';
+    return `
+      <div class="pie-sec">
+        <div class="pie-sec__head pie-sec__head--${cls}">
+          <span>${type}</span>
+          <small>${fmtMoney(pie.total)} · 佔全部 ${fmtShare(pie.total, total)}</small>
+        </div>
+        ${pieSvg(pie)}${pieListHtml(pie)}
       </div>`;
   }).join('');
 }
@@ -3547,8 +3702,8 @@ function bindEvents() {
     renderHoldings();
   });
 
-  // 持股頁和報表頁各有一顆，但背後是同一個開關，切哪一顆兩邊都跟著變
-  for (const id of ['exclude-fee', 'rp-exclude-fee']) {
+  // 持股頁一顆、報表頁兩顆（投入與損益、投入佔比），背後是同一個開關，切哪一顆都跟著變
+  for (const id of ['exclude-fee', 'rp-exclude-fee', 'pie-exclude-fee']) {
     $(id).addEventListener('change', (e) => {
       state.excludeFee = e.target.checked;
       try { localStorage.setItem(LS.excludeFee, state.excludeFee ? '1' : '0'); } catch (err) { /* 無妨 */ }
