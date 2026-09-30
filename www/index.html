@@ -165,16 +165,25 @@
     <!-- ---------- 分頁 2：報表 ---------- -->
     <section class="page" id="page-report" aria-label="報表" hidden>
 
-      <!-- 年份切換旁邊那顆切換整頁：合計，或 ETF／基金 分開看 -->
+      <!-- 第一行：切換整頁（合計，或 ETF／基金 分開看）與編輯區塊；第二行：年份。
+           年份原本跟它們擠同一行，窄手機上年份會被切掉 -->
       <div class="reportbar">
-        <div class="yearbar" id="year-bar"></div>
         <div class="seg" id="report-mode">
           <button class="seg__btn is-active" type="button" data-mode="total">合計</button>
           <button class="seg__btn" type="button" data-mode="split">分開看</button>
         </div>
+        <button class="icon-btn icon-btn--tool" id="btn-report-edit" type="button" aria-label="選擇報表要顯示哪些區塊、怎麼排">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" aria-hidden="true">
+            <path d="M5 7h14M5 12h14M5 17h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="9" cy="7" r="2.2" fill="var(--surface-1)" stroke="currentColor" stroke-width="2"/>
+            <circle cx="15" cy="12" r="2.2" fill="var(--surface-1)" stroke="currentColor" stroke-width="2"/>
+          </svg>
+        </button>
+        <div class="yearbar" id="year-bar"></div>
       </div>
 
-      <div class="card">
+      <!-- 下面每張卡片都是一個「區塊」（data-block），可以隱藏、可以排順序，設定存在這台裝置 -->
+      <div class="card" data-block="div">
         <h2 class="card__title">配息</h2>
 
         <div id="rp-div-total">
@@ -205,7 +214,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-block="chart">
         <h2 class="card__title">每月配息</h2>
         <div class="chart" id="chart"></div>
         <div class="gchart" id="chart-split" hidden></div>
@@ -213,14 +222,24 @@
         <p class="hint" id="chart-hint" hidden></p>
       </div>
 
-      <div class="card">
+      <!-- 證交所的配息公告：照除息日排，中間一條「今天」。已經發下來的可以直接記 -->
+      <div class="card" id="divcal-card" data-block="divcal" hidden>
+        <div class="card__head">
+          <h2 class="card__title">ETF 配息行事曆</h2>
+          <button class="btn btn--quote divcal__refresh" id="btn-divcal-refresh" type="button">更新</button>
+        </div>
+        <p class="card__sub" id="divcal-sub"></p>
+        <div class="divcal" id="divcal-list"></div>
+      </div>
+
+      <div class="card" data-block="balance">
         <h2 class="card__title">帳戶餘額</h2>
         <p class="card__sub">存入 − 提領 ＋ 賣出 ＋ 配息 − 買進</p>
         <div class="kv"><span>券商（ETF）</span><strong id="bal-etf">$0</strong></div>
         <div class="kv"><span>基金平台</span><strong id="bal-fund">$0</strong></div>
       </div>
 
-      <div class="card">
+      <div class="card" data-block="pl">
         <h2 class="card__title">投入與損益</h2>
         <p class="card__sub">手上的部位，不分年份</p>
 
@@ -251,7 +270,7 @@
       </div>
 
       <!-- 投入成本裡各檔佔多少。跟著上面的「合計／分開看」走，不分年份 -->
-      <div class="card" id="rp-pie-card" hidden>
+      <div class="card" id="rp-pie-card" data-block="pie" hidden>
         <h2 class="card__title">投入佔比</h2>
         <p class="card__sub">目前持有的部位，各佔投入成本多少</p>
         <div id="rp-pie"></div>
@@ -890,7 +909,22 @@
   </div>
 </div>
 
-<!-- ========== 更新現價 ========== -->
+<!-- ========== 報表：顯示哪些區塊、怎麼排 ========== -->
+<div class="sheet" id="blocks-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="blocks-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">關閉</button>
+    <h2 class="sheet__title" id="blocks-sheet-title">報表顯示哪些</h2>
+    <button class="sheet__del sheet__del--plain" id="btn-blocks-reset" type="button">預設</button>
+  </div>
+
+  <div class="sheet__body">
+    <p class="card__sub">按住右邊的 ≡ 上下拖可以排順序。設定只存在這台裝置。</p>
+    <div class="block-list" id="block-list"></div>
+  </div>
+</div>
+
 <!-- ========== 從對帳單 PDF 匯入 ========== -->
 <div class="sheet" id="import-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="import-sheet-title">
   <div class="sheet__grip" aria-hidden="true"></div>
@@ -927,6 +961,7 @@
   </div>
 </div>
 
+<!-- ========== 更新現價 ========== -->
 <div class="sheet" id="price-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="price-sheet-title">
   <div class="sheet__grip" aria-hidden="true"></div>
 

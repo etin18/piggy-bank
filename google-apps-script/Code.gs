@@ -35,7 +35,7 @@ var SECRET = '';   // ← 改成你自己的通關密語，例如 'piggy2026kk'
  * 用來確認這份程式有沒有真的重新部署上去 ——
  * 貼了新程式卻忘了「部署 → 管理部署作業 → 新版本」的話，跑的還是舊的。
  */
-var API_VERSION = 'v18';
+var API_VERSION = 'v19';
 
 /* ==========================================================================
    資料表定義
@@ -192,6 +192,8 @@ function route(payload) {
         return { ok: true, entity: payload.entity, id: removeRow(payload.entity, payload.id) };
       case 'quotes':
         return { ok: true, quotes: fetchQuotes(payload.codes || []) };
+      case 'etfDividends':
+        return { ok: true, dividends: fetchEtfDividends(payload.codes || []) };
       default:
         return { ok: false, error: '未知的操作：' + action };
     }
@@ -600,6 +602,87 @@ function fetchFromDailyApi(codes, result) {
       // 同上，換下一個來源
     }
   }
+}
+
+/* ==========================================================================
+   ETF 配息公告
+
+   證交所「ETF 分配收益」：每一期的除息交易日、收益分配基準日、發放日、
+   每單位配息金額。已經公告但金額還沒出來的下一期也會列出來（金額是 null）。
+
+   抓前後各一年：往前是給漏記提醒對照「那期有沒有記」，往後是還沒發的。
+   只有上市的 ETF 查得到；上櫃的（少數債券 ETF）證交所沒有，回空陣列。
+
+   回傳 { 代號: [ { exDate, recordDate, payDate, perUnit } ] }。
+   某一檔抓失敗就不放進結果，App 會保留那一檔上次抓到的資料。
+   ========================================================================== */
+
+function fetchEtfDividends(codes) {
+  var wanted = [];
+  for (var i = 0; i < codes.length; i++) {
+    var code = String(codes[i] || '').trim().toUpperCase();
+    if (code && wanted.indexOf(code) === -1) wanted.push(code);
+  }
+  if (!wanted.length) return {};
+
+  var now = new Date();
+  var ymd = function (d) { return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()); };
+  var from = ymd(new Date(now.getFullYear() - 1, now.getMonth(), 1));
+  var to = ymd(new Date(now.getFullYear() + 1, now.getMonth(), 1));
+
+  // 一檔一個請求，fetchAll 一次送出，不用一檔一檔等
+  var requests = wanted.map(function (code) {
+    return {
+      url: 'https://www.twse.com.tw/rwd/zh/ETF/etfDiv?stkNo=' + encodeURIComponent(code)
+        + '&startDate=' + from + '&endDate=' + to + '&response=json',
+      muteHttpExceptions: true,
+      followRedirects: true
+    };
+  });
+
+  var result = {};
+  var responses = [];
+  try {
+    responses = UrlFetchApp.fetchAll(requests);
+  } catch (err) {
+    return result;
+  }
+
+  for (var j = 0; j < wanted.length; j++) {
+    try {
+      var res = responses[j];
+      if (!res || res.getResponseCode() !== 200) continue;
+      var data = JSON.parse(res.getContentText());
+      if (String(data.status || data.stat || '').toLowerCase() !== 'ok') continue;
+
+      var rows = data.data || [];
+      var out = [];
+      for (var k = 0; k < rows.length; k++) {
+        var r = rows[k];
+        var amount = r[5];
+        // 上櫃的代號會回一筆日期全空的資料，那不是配息
+        if (!rocToIso(r[2])) continue;
+        out.push({
+          exDate: rocToIso(r[2]),
+          recordDate: rocToIso(r[3]),
+          payDate: rocToIso(r[4]),
+          // 還沒公告金額的那期是 null，不要當成 0 —— 0 是「這期不配」
+          perUnit: amount === null || amount === undefined || String(amount).trim() === ''
+            ? null : Number(String(amount).replace(/,/g, ''))
+        });
+      }
+      result[wanted[j]] = out;
+    } catch (err) {
+      // 這一檔壞了不影響其他檔
+    }
+  }
+  return result;
+}
+
+/** 「115年10月08日」→ 2026-10-08 */
+function rocToIso(text) {
+  var m = /(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/.exec(String(text || ''));
+  return m ? (Number(m[1]) + 1911) + '-' + pad2(Number(m[2])) + '-' + pad2(Number(m[3])) : '';
 }
 
 /* ==========================================================================

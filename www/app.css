@@ -1007,12 +1007,15 @@ button, input, select, textarea {
 /* 年份會橫向捲動，切換釘在右邊不跟著跑 */
 .reportbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
 }
-.reportbar .yearbar { flex: 1; min-width: 0; margin-bottom: 0; }
 .reportbar .seg { flex: none; }
+.reportbar .icon-btn--tool { margin-left: auto; }
+/* 年份自己一整行 */
+.reportbar .yearbar { flex: 1 1 100%; min-width: 0; margin-bottom: 0; }
 
 .seg {
   display: flex;
@@ -1312,6 +1315,51 @@ button, input, select, textarea {
 }
 .legend__swatch--etf  { background: var(--etf); }
 .legend__swatch--fund { background: var(--fund); }
+
+/* ---------- ETF 配息行事曆 ---------- */
+
+.divcal__refresh { padding: 6px 12px; font-size: 13px; }
+
+.divcal__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.divcal__row:first-child,
+.divcal__today + .divcal__row { border-top: 0; }
+.divcal__name { font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.divcal__amt { text-align: right; font-size: 15px; font-variant-numeric: tabular-nums; }
+.divcal__pending { color: var(--accent-deep); }
+.divcal__dates,
+.divcal__per { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.divcal__per { text-align: right; }
+.divcal__act { grid-column: 1 / -1; display: flex; justify-content: flex-end; margin-top: 4px; }
+.divcal__done { color: var(--good); font-weight: 600; }
+.divcal__rec {
+  padding: 5px 14px;
+  border: 1.5px solid var(--accent-deep);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* 「今天」那條線：已經除息的在上面，還沒到的在下面 */
+.divcal__today {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-deep);
+}
+.divcal__today::before,
+.divcal__today::after { content: ''; flex: 1; height: 1.5px; background: var(--accent-deep); opacity: .45; }
 
 /* ---------- 從對帳單 PDF 匯入 ---------- */
 
@@ -1904,6 +1952,50 @@ button, input, select, textarea {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ---------- 報表：顯示哪些區塊、怎麼排 ---------- */
+
+/* 使用者關掉的區塊。跟 hidden 分開 —— 行事曆、投入佔比沒資料時會自己設 hidden */
+[data-block].is-off { display: none !important; }
+
+.block-list { display: flex; flex-direction: column; }
+
+.block-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+.block-row:last-child { border-bottom: 0; }
+.block-row__toggle { flex: 1; min-width: 0; padding: 12px 2px; font-size: 15px; cursor: pointer; }
+.block-row__toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.block-row__label small { display: block; font-size: 12px; color: var(--muted); }
+
+.block-row__handle {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;   /* 拖的時候頁面不要跟著捲 */
+}
+.block-row__handle:focus-visible { outline: 2px solid var(--accent-deep); }
+
+/* 拖著的那一列浮起來 */
+.block-row.is-dragging {
+  position: relative;
+  z-index: 2;
+  border-radius: 12px;
+  box-shadow: var(--shadow-lift);
+  background: var(--page);
+}
+.block-row.is-dragging .block-row__handle { cursor: grabbing; color: var(--accent-deep); }
 
 /* ---------- 已出清 ---------- */
 
@@ -2623,6 +2715,17 @@ select.input {
 :is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .hold__detail {
   padding-left: 14px;
   padding-right: 14px;
+}
+
+/* 年份那排可以左右滑（overflow），捲動區塊會把按鈕的陰影和選中的光暈切掉，
+   切口看起來像按鈕後面多了一塊方形底色（粉色主題的陰影帶粉紅，最明顯）。
+   往外多留空間讓陰影畫得完，再用負 margin 抵掉，按鈕位置和間距都不變 */
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .yearbar {
+  padding: 10px 8px 18px;
+  margin: -10px -8px -6px;          /* 原本下方 12px － 多留的 18px */
+}
+:is([data-theme="haze"], [data-theme="forest"], [data-theme="pink"]) .reportbar .yearbar {
+  margin-bottom: -18px;             /* 報表頁那排原本下方是 0 */
 }
 
 /* 圓的東西要維持圓，不能被卡片圓角接管 */

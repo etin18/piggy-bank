@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v29';
+const APP_VERSION = 'v31';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -36,7 +36,9 @@ const LS = {
   privacy: 'pb.privacy',  // 遮金額只存在這台裝置
   ledger: 'pb.ledger',    // 明細頁的期間與篩選
   apiVersion: 'pb.apiVersion',
-  pdfPasswords: 'pb.pdfPasswords',  // 對帳單 PDF 的密碼，勾了「記住」才存，只在這台裝置
+  pdfPasswords: 'pb.pdfPasswords',
+  etfDividends: 'pb.etfDividends',
+  reportBlocks: 'pb.reportBlocks',  // 報表頁顯示哪些區塊、怎麼排，只存在這台裝置  // 證交所的 ETF 配息公告快取（公開資料，只存在這台裝置）  // 對帳單 PDF 的密碼，勾了「記住」才存，只在這台裝置
   data: 'pb.',            // pb.instruments、pb.trades …
 };
 
@@ -58,6 +60,19 @@ const HOLDING_FIELDS = [
 ];
 
 const DEFAULT_FIELDS = ['avg', 'price', 'rate'];
+
+/**
+ * 報表頁的區塊（對應 index.html 裡的 data-block），陣列順序就是預設排法。
+ * 以後加新區塊只要加在這裡：排過順序的人，新的會自動接在最後面、預設顯示。
+ */
+const REPORT_BLOCKS = [
+  { key: 'div', label: '配息', hint: '全年累積、平均每月' },
+  { key: 'chart', label: '每月配息', hint: '長條圖' },
+  { key: 'divcal', label: 'ETF 配息行事曆', hint: '證交所公告' },
+  { key: 'balance', label: '帳戶餘額', hint: '' },
+  { key: 'pl', label: '投入與損益', hint: '' },
+  { key: 'pie', label: '投入佔比', hint: '圓餅' },
+];
 
 /** 明細頁的期間快捷 */
 const LEDGER_RANGES = ['recent6', 'recent12', 'year', 'all', 'custom'];
@@ -133,6 +148,8 @@ const state = {
   detailFilter: 'all',
   returnToDetail: null,  // 關掉編輯面板後要回到哪一檔的明細
   returnToImport: false, // 從 PDF 匯入清單點進表單的話，關掉之後回清單
+  etfDiv: { fetchedAt: '', byCode: {} },
+  reportBlocks: { order: [], hidden: [] },   // 報表頁：區塊順序與隱藏的區塊   // ETF 配息公告：{ 代號: [{ exDate, recordDate, payDate, perUnit }] }
   detailScroll: 0,       // 明細列表捲到哪，返回時停回原位
   expanded: new Set(),   // 持股頁展開了哪幾檔
 
@@ -289,6 +306,11 @@ function loadLocal() {
     state.excludeFee = localStorage.getItem(LS.excludeFee) === '1';
     state.reportSplit = localStorage.getItem(LS.reportSplit) === '1';
     state.privacy = localStorage.getItem(LS.privacy) === '1';
+
+    state.reportBlocks = normalizeReportBlocks(JSON.parse(localStorage.getItem(LS.reportBlocks) || 'null'));
+
+    const etfDiv = JSON.parse(localStorage.getItem(LS.etfDividends) || 'null');
+    if (etfDiv && typeof etfDiv.byCode === 'object') state.etfDiv = etfDiv;
 
     // 明細頁的篩選：只收認得的值，改版後留下的舊 key 直接丟掉
     const ledger = JSON.parse(localStorage.getItem(LS.ledger) || 'null');
@@ -917,56 +939,87 @@ function findMissingDividends() {
   const out = [];
 
   for (const position of buildPositions()) {
-    const gap = DIVIDEND_GAP[position.instrument.frequency];
-    if (!gap) continue;
+    // ETF 抓過證交所的配息公告的話，公告涵蓋的那一年直接拿公告對，不用猜。
+    // 公告沒涵蓋到的更早以前，才退回照頻率推算
+    const official = officialDividends(position.instrument);
+    const inferred = inferredMisses(position, today);
 
-    const dates = position.dividendRows
-      .map((d) => d.exDate || d.payDate)
-      .filter(Boolean)
-      .sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
-
-    if (dates.length) {
-      // 推算的月份跟實際除息月份會差一點，容忍半個間隔
-      const tolerance = Math.floor(gap / 2);
-      const seen = dates.map(ymNumber);
-      const misses = [];
-
-      for (let i = 1; i < 200; i += 1) {
-        const dueDate = addMonths(dates[0], gap * i);
-        const due = toYmd(dueDate);
-        if (due > today) break;
-
-        const deadline = new Date(dueDate);
-        deadline.setDate(deadline.getDate() + dividendGrace(gap));
-        if (toYmd(deadline) > today) continue;                       // 還在寬限期內
-        if (!heldAt(position, due)) continue;                        // 那天沒持有
-        if (seen.some((m) => Math.abs(m - ymNumber(due)) <= tolerance)) continue;
-
-        misses.push(due);
-      }
-
-      if (misses.length) {
-        out.push({ position, due: misses[0], count: misses.length, kind: 'gap' });
-      }
+    if (!official) {
+      if (inferred) out.push(inferred);
       continue;
     }
 
-    // 一次都沒領過。已經出清的就算了，那檔的故事已經結束
-    if (position.qty <= EPS) continue;
+    const misses = official.rows
+      .filter((r) => r.perUnit > 0 && r.payDate && addDays(r.payDate, OFFICIAL_GRACE_DAYS) <= today)
+      .filter((r) => heldAt(position, dayBefore(r.exDate)))
+      .filter((r) => !recordedDividend(position.instrument, r))
+      .sort((a, b) => a.exDate.localeCompare(b.exDate));
 
-    const firstBuy = position.trades
-      .filter((t) => t.action !== SELL && t.date && t.date !== PRE)
-      .map((t) => t.date)
-      .sort()[0];
-    if (!firstBuy) continue;
+    const older = inferred && inferred.kind === 'gap'
+      ? inferred.dates.filter((d) => d < official.since)
+      : [];
 
-    if (toYmd(addMonths(firstBuy, gap * 2)) <= today) {
-      out.push({ position, due: firstBuy, count: 0, kind: 'never' });
-    }
+    const count = misses.length + older.length;
+    if (!count) continue;
+    out.push(older.length
+      ? { position, due: older[0], count, kind: 'gap' }
+      : { position, due: misses[0].exDate, count, kind: 'official', row: misses[0] });
   }
 
   // 最舊的排前面——擱最久的最可能已經忘了
   return out.sort((a, b) => sortKey(a.due).localeCompare(sortKey(b.due)));
+}
+
+/** 公告上的發放日過了這麼多天還沒記，才開口問 —— 錢剛入帳那幾天還來不及記是常態 */
+const OFFICIAL_GRACE_DAYS = 7;
+
+/** 照配息頻率推算的那一套（見上面的說明），給沒有官方公告的標的用 */
+function inferredMisses(position, today) {
+  const gap = DIVIDEND_GAP[position.instrument.frequency];
+  if (!gap) return null;
+
+  const dates = position.dividendRows
+    .map((d) => d.exDate || d.payDate)
+    .filter(Boolean)
+    .sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
+  if (dates.length) {
+    // 推算的月份跟實際除息月份會差一點，容忍半個間隔
+    const tolerance = Math.floor(gap / 2);
+    const seen = dates.map(ymNumber);
+    const misses = [];
+
+    for (let i = 1; i < 200; i += 1) {
+      const dueDate = addMonths(dates[0], gap * i);
+      const due = toYmd(dueDate);
+      if (due > today) break;
+
+      const deadline = new Date(dueDate);
+      deadline.setDate(deadline.getDate() + dividendGrace(gap));
+      if (toYmd(deadline) > today) continue;                       // 還在寬限期內
+      if (!heldAt(position, due)) continue;                        // 那天沒持有
+      if (seen.some((m) => Math.abs(m - ymNumber(due)) <= tolerance)) continue;
+
+      misses.push(due);
+    }
+
+    return misses.length
+      ? { position, due: misses[0], count: misses.length, kind: 'gap', dates: misses }
+      : null;
+  }
+
+  // 一次都沒領過。已經出清的就算了，那檔的故事已經結束
+  if (position.qty <= EPS) return null;
+
+  const firstBuy = position.trades
+    .filter((t) => t.action !== SELL && t.date && t.date !== PRE)
+    .map((t) => t.date)
+    .sort()[0];
+  if (!firstBuy) return null;
+
+  return toYmd(addMonths(firstBuy, gap * 2)) <= today
+    ? { position, due: firstBuy, count: 0, kind: 'never', dates: [] }
+    : null;
 }
 
 /** 今年只算到這個月為止，去年以前就是整整 12 個月 */
@@ -1248,6 +1301,9 @@ function renderRecord() {
 /** 首頁最多列這麼多期，再多就只講數量 */
 const MISSING_LIMIT = 5;
 
+/** 目前列出來的那幾期，點下去要拿得到公告的整筆資料 */
+let missingShown = [];
+
 /** 漏記提醒。沒事的時候整張卡不出現 */
 function renderMissing() {
   const items = findMissingDividends();
@@ -1263,7 +1319,8 @@ function renderMissing() {
     : `有 ${total} 期好像還沒記`;
 
   const shown = items.slice(0, MISSING_LIMIT);
-  $('missing-list').innerHTML = shown.map((item) => {
+  missingShown = shown;
+  $('missing-list').innerHTML = shown.map((item, index) => {
     const p = item.position;
     // 基金要連部位一起講 —— 單筆和定期定額是分開發的，只講標的名會不知道補哪一邊
     const name = p.type === FUND
@@ -1272,7 +1329,11 @@ function renderMissing() {
 
     const freq = p.instrument.frequency || '';
     let meta;
-    if (item.kind === 'never') {
+    if (item.kind === 'official') {
+      const r = item.row;
+      meta = `${fmtDate(r.exDate)} 除息 · ${fmtDate(r.payDate)} 發放 · 每股 ${fmtNum(r.perUnit, 4)}`
+        + (item.count > 1 ? `，共 ${item.count} 期沒記` : ' 沒記');
+    } else if (item.kind === 'never') {
       meta = `${freq} · 買了 ${monthsSince(item.due)} 個月，一次都還沒領過`;
     } else if (item.count > 1) {
       meta = `${freq} · ${fmtYm(item.due)} 起有 ${item.count} 期沒記`;
@@ -1282,6 +1343,7 @@ function renderMissing() {
 
     return `
       <button class="alert__item" type="button"
+              data-missing-index="${index}"
               data-missing-id="${escapeHtml(p.instrument.id)}"
               data-missing-style="${escapeHtml(p.style || '')}"
               data-missing-date="${escapeHtml(item.kind === 'never' ? '' : item.due)}">
@@ -1422,6 +1484,7 @@ function entryHtml(entry) {
 /* ---------- 報表頁 ---------- */
 
 function renderReport() {
+  applyReportBlocks();
   const years = availableYears();
   if (!state.reportYear || !years.includes(state.reportYear)) state.reportYear = years[0];
   const year = state.reportYear;
@@ -1494,6 +1557,7 @@ function renderReport() {
   $('pie-exclude-fee').checked = state.excludeFee;
 
   renderPie(split);
+  renderDivCalendar();
 
   const missing = etf.missing + fund.missing;
   const hint = $('rp-price-hint');
@@ -2640,7 +2704,8 @@ function bindSheetDrag(sheet) {
     vy = 0;
     dragging = false;
     // 從輸入框起手不接管，不然選字會被吃掉
-    settled = inside(e.target, 'input, textarea, select');
+    // 從排序的拖曳把手起手也不接管，不然往下拖一列會把整個面板拉掉
+    settled = inside(e.target, 'input, textarea, select, [data-drag-handle]');
   }, { passive: true });
 
   sheet.addEventListener('touchmove', (e) => {
@@ -3486,6 +3551,9 @@ async function refreshEtfPrices() {
     $('quote-btn-text').textContent = '更新 ETF 現價';
     renderHoldings();
   }
+
+  // 配息公告一起抓。分開呼叫：後端還沒更新的話，至少現價照樣能用
+  refreshEtfDividends({ quiet: true });
 }
 
 /** 現價表單裡的單檔抓取 */
@@ -3648,6 +3716,324 @@ function exportDividends() {
 /* ==========================================================================
    主題
    ========================================================================== */
+
+/* ==========================================================================
+   報表頁：顯示哪些區塊、怎麼排
+
+   每張卡片有 data-block，順序和隱藏的清單存在這台裝置（跟主題、持股的顯示欄位一樣）。
+   排序是直接搬動 DOM：卡片本身怎麼畫完全不用改。
+
+   「隱藏」用 class（is-off）而不是 hidden 屬性 —— 行事曆、投入佔比沒資料時
+   自己會設 hidden，兩件事要分開，不然使用者打開的區塊會被程式關掉、或反過來。
+   ========================================================================== */
+
+/** 只留認得的區塊；存過順序之後才新增的區塊接在最後、預設顯示 */
+function normalizeReportBlocks(saved) {
+  const keys = REPORT_BLOCKS.map((b) => b.key);
+  const order = Array.isArray(saved && saved.order) ? saved.order.filter((k) => keys.includes(k)) : [];
+  for (const k of keys) if (!order.includes(k)) order.push(k);
+  const hidden = Array.isArray(saved && saved.hidden) ? saved.hidden.filter((k) => keys.includes(k)) : [];
+  // 全部藏起來的話整頁空白，看起來像壞掉 —— 至少留第一個
+  if (hidden.length >= keys.length) hidden.splice(hidden.indexOf(order[0]), 1);
+  return { order, hidden };
+}
+
+function saveReportBlocks() {
+  try { localStorage.setItem(LS.reportBlocks, JSON.stringify(state.reportBlocks)); } catch (err) { /* 無妨 */ }
+  applyReportBlocks();
+}
+
+function applyReportBlocks() {
+  const page = $('page-report');
+  for (const key of state.reportBlocks.order) {
+    const el = page.querySelector(`[data-block="${key}"]`);
+    if (!el) continue;
+    page.appendChild(el);   // 依序搬到最後面，搬完就是新的順序
+    el.classList.toggle('is-off', state.reportBlocks.hidden.includes(key));
+  }
+}
+
+function openBlocksSheet() {
+  renderBlockList();
+  openSheet('blocks-sheet');
+}
+
+function renderBlockList() {
+  const byKey = Object.fromEntries(REPORT_BLOCKS.map((b) => [b.key, b]));
+  $('block-list').innerHTML = state.reportBlocks.order.map((key) => {
+    const b = byKey[key];
+    const on = !state.reportBlocks.hidden.includes(key);
+    return `
+      <div class="block-row" data-key="${key}">
+        <label class="toggle block-row__toggle">
+          <input type="checkbox" data-block-toggle="${key}" ${on ? 'checked' : ''}>
+          <span class="toggle__box" aria-hidden="true"></span>
+          <span class="block-row__label">${b.label}${b.hint ? `<small>${b.hint}</small>` : ''}</span>
+        </label>
+        <button class="block-row__handle" type="button" data-drag-handle
+                aria-label="${b.label}：拖曳或用上下鍵排順序">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
+            <path d="M5 8h14M5 12h14M5 16h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>`;
+  }).join('');
+}
+
+/** 照清單現在的樣子存順序 */
+function saveBlockOrderFromList() {
+  state.reportBlocks.order = [...$('block-list').querySelectorAll('.block-row')].map((r) => r.dataset.key);
+  saveReportBlocks();
+}
+
+/**
+ * 按住 ≡ 上下拖。拖過相鄰那一列的一半就跟它換位置，放手才存。
+ * 用 pointer events，滑鼠和手指同一套；把手設了 touch-action: none，拖的時候頁面不會跟著捲。
+ */
+function bindBlockDrag(list) {
+  let row = null;
+  let startY = 0;
+  let pointerId = null;
+
+  const follow = (y) => { row.style.transform = `translateY(${y - startY}px)`; };
+
+  list.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('[data-drag-handle]');
+    if (!handle) return;
+    e.preventDefault();
+    row = handle.closest('.block-row');
+    pointerId = e.pointerId;
+    startY = e.clientY;
+    handle.setPointerCapture(pointerId);
+    row.classList.add('is-dragging');
+  });
+
+  list.addEventListener('pointermove', (e) => {
+    if (!row || e.pointerId !== pointerId) return;
+    const dy = e.clientY - startY;
+    const next = row.nextElementSibling;
+    const prev = row.previousElementSibling;
+    if (next && dy > next.offsetHeight / 2) {
+      list.insertBefore(next, row);
+      startY += next.offsetHeight;   // 換完位置，起點跟著移，列才不會跳
+    } else if (prev && dy < -prev.offsetHeight / 2) {
+      list.insertBefore(row, prev);
+      startY -= prev.offsetHeight;
+    }
+    follow(e.clientY);
+  });
+
+  const end = (e) => {
+    if (!row || e.pointerId !== pointerId) return;
+    row.style.transform = '';
+    row.classList.remove('is-dragging');
+    row = null;
+    saveBlockOrderFromList();
+  };
+  list.addEventListener('pointerup', end);
+  list.addEventListener('pointercancel', end);
+
+  // 鍵盤：把手拿到焦點時，上下鍵一次移一格
+  list.addEventListener('keydown', (e) => {
+    const handle = e.target.closest('[data-drag-handle]');
+    if (!handle || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    e.preventDefault();
+    const r = handle.closest('.block-row');
+    if (e.key === 'ArrowUp' && r.previousElementSibling) list.insertBefore(r, r.previousElementSibling);
+    if (e.key === 'ArrowDown' && r.nextElementSibling) list.insertBefore(r.nextElementSibling, r);
+    handle.focus();
+    saveBlockOrderFromList();
+  });
+}
+
+/* ==========================================================================
+   ETF 配息公告（證交所「ETF 分配收益」）
+
+   每一期的除息日、發放日、每單位配息。已公告但金額還沒出來的下一期也有（perUnit 是 null）。
+   瀏覽器不能直接連證交所，跟現價一樣由 Apps Script 代抓；抓到的存在這台裝置，
+   不寫進試算表 —— 那是公開資料，不是使用者的紀錄。
+
+   三個地方用到：
+     報表頁的「ETF 配息行事曆」
+     每一期可以直接「記下」，除息日、發放日、每股、持有股數都先填好
+     漏記提醒：公告涵蓋的那一年直接拿公告對，不用再照頻率猜
+   ========================================================================== */
+
+/** 行事曆往回看幾天：最近幾期還沒記的要看得到，太久以前的就不列了 */
+const DIVCAL_LOOKBACK_DAYS = 90;
+
+function addDays(ymd, n) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  return toYmd(new Date(y, m - 1, d + n));
+}
+
+/** 除息日前一天還持有的才領得到 */
+const dayBefore = (ymd) => addDays(ymd, -1);
+
+const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
+
+/**
+ * 這一檔的公告，外加公告涵蓋的起點（抓的時候往回抓一年）。
+ * 沒抓過、或上次抓失敗的，回 null —— 那就退回照頻率推算，不要當成「沒有配息」。
+ */
+function officialDividends(inst) {
+  if (!inst || inst.type !== ETF) return null;
+  const code = String(inst.code || '').trim().toUpperCase();
+  const rows = state.etfDiv.byCode[code];
+  if (!code || !Array.isArray(rows) || !state.etfDiv.fetchedAt) return null;
+
+  const fetched = new Date(state.etfDiv.fetchedAt);
+  const since = toYmd(new Date(fetched.getFullYear() - 1, fetched.getMonth(), 1));
+  return { rows: rows.filter((r) => r.exDate), since };
+}
+
+/**
+ * 公告的這一期，使用者記了沒有。
+ * 使用者記的發放日常是「錢入帳那天」，會跟公告差個一兩天，所以放寬到一週。
+ */
+function recordedDividend(inst, row) {
+  return live('dividends').find((d) => d.instrumentId === inst.id && (
+    (d.exDate && Math.abs(daysBetween(d.exDate, row.exDate)) <= 3)
+    || (d.payDate && row.payDate && Math.abs(daysBetween(d.payDate, row.payDate)) <= 7)
+  )) || null;
+}
+
+/** 要抓哪幾檔：有代號的 ETF，包括出清的（漏記提醒要對得到出清前那幾期） */
+function etfCodesForDividends() {
+  return [...new Set(live('instruments')
+    .filter((i) => i.type === ETF && String(i.code || '').trim())
+    .map((i) => String(i.code).trim().toUpperCase()))];
+}
+
+async function refreshEtfDividends({ quiet = false } = {}) {
+  const codes = etfCodesForDividends();
+  if (!codes.length) {
+    if (!quiet) toast('請先幫 ETF 填代號');
+    return;
+  }
+  if (!state.apiUrl) {
+    if (!quiet) toast('請先到設定連線試算表');
+    return;
+  }
+
+  const btn = $('btn-divcal-refresh');
+  btn.disabled = true;
+  try {
+    const data = await apiCall({ action: 'etfDividends', codes });
+    const got = data.dividends || {};
+    // 某一檔這次沒抓到就留著上次的，不要整個清掉
+    state.etfDiv = { fetchedAt: new Date().toISOString(), byCode: { ...state.etfDiv.byCode, ...got } };
+    try { localStorage.setItem(LS.etfDividends, JSON.stringify(state.etfDiv)); } catch (err) { /* 無妨 */ }
+    if (!quiet) toast(`已更新 ${Object.keys(got).length} 檔的配息公告`);
+  } catch (err) {
+    // 後端還是舊版的話，講清楚要做什麼，不要只丟「未知的操作」
+    const old = /未知的操作/.test(err.message || '');
+    if (old || !quiet) toast(old ? '配息公告要先更新後端：貼上新版 Code.gs 並重新部署' : (err.message || '查詢失敗'));
+  } finally {
+    btn.disabled = false;
+    render();
+  }
+}
+
+/**
+ * 行事曆的每一列：照除息日排，最近 90 天到未來。
+ * 除息前一天沒持有的那期領不到，就不列 —— 不相干的列只會讓人找不到重點。
+ */
+function divCalendarEntries() {
+  const today = todayStr();
+  const from = addDays(today, -DIVCAL_LOOKBACK_DAYS);
+  const out = [];
+
+  for (const inst of live('instruments').filter((i) => i.type === ETF)) {
+    const official = officialDividends(inst);
+    if (!official) continue;
+    for (const row of official.rows) {
+      if (row.exDate < from) continue;
+      const units = unitsHeldAt(inst.id, dayBefore(row.exDate));
+      if (units <= EPS) continue;
+      out.push({ inst, row, units, recorded: recordedDividend(inst, row) });
+    }
+  }
+  return out.sort((a, b) => a.row.exDate.localeCompare(b.row.exDate)
+    || (a.row.payDate || '').localeCompare(b.row.payDate || ''));
+}
+
+let divCalShown = [];
+
+function renderDivCalendar() {
+  const card = $('divcal-card');
+  const hasEtf = etfCodesForDividends().length > 0;
+  card.hidden = !hasEtf;
+  if (!hasEtf) return;
+
+  const today = todayStr();
+  const fetched = state.etfDiv.fetchedAt;
+  $('divcal-sub').textContent = fetched
+    ? `證交所公告 · 約可領＝每股 × 除息前一天的持有股數 · ${fmtStamp(fetched)} 更新`
+    : '還沒抓過。按「更新」從證交所抓配息公告，更新 ETF 現價時也會一起抓。';
+
+  divCalShown = divCalendarEntries();
+  if (fetched && !divCalShown.length) {
+    $('divcal-list').innerHTML = '<p class="hint">最近沒有你持有的 ETF 配息。</p>';
+    return;
+  }
+
+  let html = '';
+  let markedToday = false;
+  divCalShown.forEach((e, i) => {
+    // 「今天」那條線：上面是已經除息的，下面是還沒到的
+    if (!markedToday && e.row.exDate > today) {
+      html += `<div class="divcal__today"><span>今天 ${fmtDate(today)}</span></div>`;
+      markedToday = true;
+    }
+    const pending = e.row.perUnit === null || e.row.perUnit === undefined;
+    const paid = e.row.payDate && e.row.payDate <= today;
+
+    // 記過的只在日期後面小小標一下，不另佔一行 —— 過去幾期大多是記過的，每列多一行會拉得很長
+    const done = e.recorded ? ' · <span class="divcal__done">已記 ✓</span>' : '';
+    const act = !e.recorded && !pending && e.row.perUnit > 0 && paid
+      ? `<button class="divcal__rec" type="button" data-divcal="${i}">記下</button>` : '';
+
+    const amount = pending
+      ? '<strong class="divcal__pending">待公告</strong>'
+      : `<strong>約 ${fmtMoney(e.row.perUnit * e.units)}</strong>`;
+    const per = pending ? '' : `每股 ${fmtNum(e.row.perUnit, 4)} × ${fmtQty(ETF, e.units)}`;
+
+    html += `
+      <div class="divcal__row ${e.row.exDate <= today ? 'is-past' : ''}">
+        <span class="divcal__name">${escapeHtml(e.inst.name)}</span>
+        <span class="divcal__amt">${amount}</span>
+        <span class="divcal__dates">除息 ${fmtDate(e.row.exDate)} · 發放 ${fmtDate(e.row.payDate)}${done}</span>
+        <span class="divcal__per">${escapeHtml(per)}</span>
+        ${act ? `<span class="divcal__act">${act}</span>` : ''}
+      </div>`;
+  });
+  if (!markedToday && divCalShown.length) {
+    html += `<div class="divcal__today"><span>今天 ${fmtDate(today)}</span></div>`;
+  }
+  $('divcal-list').innerHTML = html;
+}
+
+/**
+ * 從公告記一筆配息：日期、每股、持有股數照公告與紀錄填好。
+ * 實領先填「每股 × 股數」，實際入帳常被扣掉 10 元匯費或補充保費，使用者照存摺改。
+ */
+function recordOfficialDividend(inst, row) {
+  const units = unitsHeldAt(inst.id, dayBefore(row.exDate));
+  openDividendSheet({
+    category: ETF,
+    prefill: {
+      fromImport: true,
+      instrumentId: inst.id,
+      exDate: row.exDate,
+      payDate: row.payDate,
+      perUnit: row.perUnit,
+      units,
+      received: Math.round(row.perUnit * units),
+      note: '',
+    },
+  });
+}
 
 /* ==========================================================================
    從對帳單 PDF 匯入
@@ -4157,6 +4543,10 @@ function bindEvents() {
     const inst = instrumentById(btn.dataset.missingId);
     if (!inst) return;
 
+    // 有官方公告的那期：除息日、發放日、每股、股數全部照公告填好
+    const item = missingShown[Number(btn.dataset.missingIndex)];
+    if (item && item.kind === 'official') return recordOfficialDividend(inst, item.row);
+
     openDividendSheet({
       category: inst.type,
       prefill: {
@@ -4220,6 +4610,39 @@ function bindEvents() {
   });
   $('rp-pie').addEventListener('focusout', (e) => {
     if (pieTarget(e)) hidePieTip();
+  });
+
+  // ---- 報表頁：顯示哪些區塊、怎麼排 ----
+  $('btn-report-edit').addEventListener('click', openBlocksSheet);
+  bindBlockDrag($('block-list'));
+  $('block-list').addEventListener('change', (e) => {
+    const box = e.target.closest('[data-block-toggle]');
+    if (!box) return;
+    const key = box.dataset.blockToggle;
+    const hidden = state.reportBlocks.hidden.filter((k) => k !== key);
+    if (!box.checked) hidden.push(key);
+    // 不能全部關掉：整頁空白看起來像壞掉
+    if (hidden.length >= REPORT_BLOCKS.length) {
+      box.checked = true;
+      return toast('至少要留一個區塊');
+    }
+    state.reportBlocks.hidden = hidden;
+    saveReportBlocks();
+  });
+  $('btn-blocks-reset').addEventListener('click', () => {
+    state.reportBlocks = normalizeReportBlocks(null);
+    saveReportBlocks();
+    renderBlockList();
+    toast('已恢復預設');
+  });
+
+  // ---- 報表頁：ETF 配息行事曆 ----
+  $('btn-divcal-refresh').addEventListener('click', () => refreshEtfDividends());
+  $('divcal-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-divcal]');
+    if (!btn) return;
+    const entry = divCalShown[Number(btn.dataset.divcal)];
+    if (entry) recordOfficialDividend(entry.inst, entry.row);
   });
 
   // ---- 從對帳單 PDF 匯入 ----

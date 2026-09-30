@@ -71,6 +71,17 @@ const prices = instruments.map((i) => ({ id: 'p' + i.id, instrumentId: i.id, pri
 
 const DATA = { instruments, trades, dividends, cashflows, prices };
 
+// ETF 配息公告（虛構），讓報表頁的配息行事曆也被掃到：過去、已除息未發放、待公告都有
+const shift = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const ETF_DIV = {
+  fetchedAt: new Date().toISOString(),
+  byCode: Object.fromEntries(instruments.filter((i) => i.type === 'ETF').map((i) => [i.code, [
+    { exDate: shift(-50), recordDate: shift(-44), payDate: shift(-30), perUnit: 0.123 },
+    { exDate: shift(-10), recordDate: shift(-4), payDate: shift(12), perUnit: 1.75 },
+    { exDate: shift(20), recordDate: shift(26), payDate: shift(45), perUnit: null },
+  ]])),
+};
+
 const THEMES = ['light', 'dark', 'haze', 'forest', 'pink'];
 const PAGES = ['record', 'report', 'holdings', 'ledger', 'settings'];
 // 360 是多數 Android、390 是多數 iPhone；320 是很舊的小手機，只提醒不算失敗
@@ -90,12 +101,13 @@ const SMALL = 320;
     page.on('pageerror', (e) => errors.push(e.message));
 
     await page.goto(BASE);
-    await page.evaluate((data) => {
+    await page.evaluate(({ etfDiv, ...data }) => {
       localStorage.clear();
       for (const [k, list] of Object.entries(data)) {
         localStorage.setItem('pb.' + k, JSON.stringify(list.map((r) => ({ ...r, _synced: true }))));
       }
-    }, DATA);
+      localStorage.setItem('pb.etfDividends', JSON.stringify(etfDiv));
+    }, { ...DATA, etfDiv: ETF_DIV });
     await page.reload();
     await page.waitForTimeout(600);
 
