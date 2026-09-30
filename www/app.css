@@ -1313,6 +1313,25 @@ button, input, select, textarea {
 .legend__swatch--etf  { background: var(--etf); }
 .legend__swatch--fund { background: var(--fund); }
 
+/* ---------- 從對帳單 PDF 匯入 ---------- */
+
+.import-btn { margin-top: 14px; }
+
+.import__file {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.import__status { margin: 0 0 12px; font-size: 14px; color: var(--text-secondary); }
+.import__password { display: grid; gap: 12px; margin-bottom: 6px; }
+
+#import-list:empty { display: none; }
+.import__item.is-done { opacity: .5; }
+.import__badge--done { background: var(--surface-2); color: var(--muted); }
+.import__badge--warn { background: var(--accent-weak); color: var(--warn); }
+.import__again { margin-top: 16px; }
+
 /* ---------- 投入佔比（圓餅） ---------- */
 
 .pie-mix {

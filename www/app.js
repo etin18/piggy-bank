@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v28';
+const APP_VERSION = 'v29';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -36,6 +36,7 @@ const LS = {
   privacy: 'pb.privacy',  // 遮金額只存在這台裝置
   ledger: 'pb.ledger',    // 明細頁的期間與篩選
   apiVersion: 'pb.apiVersion',
+  pdfPasswords: 'pb.pdfPasswords',  // 對帳單 PDF 的密碼，勾了「記住」才存，只在這台裝置
   data: 'pb.',            // pb.instruments、pb.trades …
 };
 
@@ -131,6 +132,7 @@ const state = {
   detailId: null,        // 正在看明細的標的
   detailFilter: 'all',
   returnToDetail: null,  // 關掉編輯面板後要回到哪一檔的明細
+  returnToImport: false, // 從 PDF 匯入清單點進表單的話，關掉之後回清單
   detailScroll: 0,       // 明細列表捲到哪，返回時停回原位
   expanded: new Set(),   // 持股頁展開了哪幾檔
 
@@ -2591,6 +2593,12 @@ function closeSheet(immediate = false) {
     state.returnToDetail = null;
     openDetailSheet(back, { restoreScroll: true });
   }
+
+  // 從匯入清單點進來的，存完（或取消）回清單，那一筆會變成「已經記過」
+  if (!switchingSheet && state.returnToImport && id !== 'import-sheet') {
+    state.returnToImport = false;
+    openImportSheet();
+  }
 }
 
 /* ---------- 往下拉關掉 ----------
@@ -2779,6 +2787,21 @@ function openTradeSheet({ category, action, record = null, prefill = null }) {
     $('t-date').value = todayStr();
     $('t-initial').checked = false;
     for (const id of ['t-qty', 't-amount', 't-cash']) $(id).dataset.auto = '1';
+  }
+
+  // 從對帳單匯入：整張照單據填好。自動推算要關掉 ——
+  // 這些就是對帳單上的數字，不該被「金額 ÷ 淨值」之類的算式改掉（會差在四捨五入）
+  if (!record && prefill && prefill.fromImport) {
+    if (prefill.style) state.draft.style = prefill.style;
+    $('t-date').value = prefill.date;
+    $('t-qty').value = fmtNum(prefill.qty, 4);
+    $('t-price').value = prefill.price ? fmtNum(prefill.price, 6) : '';
+    $('t-rate').value = prefill.rate && prefill.rate !== 1 ? fmtNum(prefill.rate, 4) : '';
+    $('t-amount').value = prefill.amount ? fmtNum(prefill.amount, 2) : '';
+    $('t-fee').value = prefill.fee ? fmtNum(prefill.fee, 2) : '';
+    $('t-cash').value = prefill.cash ? fmtNum(prefill.cash, 2) : '';
+    $('t-note').value = prefill.note || '';
+    for (const id of ['t-qty', 't-amount', 't-cash']) $(id).dataset.auto = '0';
   }
 
   setChips('t-unit-chips', 'unit', state.draft.unit);
@@ -3056,6 +3079,16 @@ function openDividendSheet({ category, record = null, prefill = null }) {
     for (const id of ['d-perunit', 'd-units', 'd-received', 'd-note']) $(id).value = '';
     $('d-units').dataset.auto = '1';
     if (prefill && prefill.exDate) autofillUnits();
+
+    // 從對帳單匯入：持有單位用通知上的，不用推算的 —— 兩個對不上正好是該注意的地方
+    if (prefill && prefill.fromImport) {
+      $('d-paydate').value = prefill.payDate || todayStr();
+      $('d-perunit').value = prefill.perUnit ? fmtNum(prefill.perUnit, 6) : '';
+      $('d-units').value = prefill.units ? fmtNum(prefill.units, 4) : '';
+      $('d-units').dataset.auto = '0';
+      $('d-received').value = prefill.received ? fmtNum(prefill.received, 2) : '';
+      $('d-note').value = prefill.note || '';
+    }
   }
 
   updateDividendHints();
@@ -3616,6 +3649,396 @@ function exportDividends() {
    主題
    ========================================================================== */
 
+/* ==========================================================================
+   從對帳單 PDF 匯入
+
+   選檔 → 解密碼 → pdf.js 取出每段文字和它的座標 → 認出是哪種單據、拆出欄位
+   → 列出清單（標出哪些已經記過）→ 點一筆打開「填好的表單」→ 使用者按儲存。
+
+   **不直接寫入。** 抓錯的數字不會跟任何東西矛盾，只會安靜地變成一個
+   看起來很合理的錯數字 —— 讓人看一眼再存，成本幾乎是零。
+
+   欄位不是照「第幾個數字」抓，而是照表頭：每個值對到水平位置最近的欄名。
+   銀行把欄位挪一下、多一欄少一欄，只要欄名還在就抓得到。
+
+   目前認得：
+     合作金庫  基金申購分配通知、基金除息通知
+     台新證券  成交資料（ETF 買賣）
+
+   整個過程都在這台手機上，PDF 不會送到任何地方，也不會被保存。
+   ========================================================================== */
+
+const PDFJS_URL = 'vendor/pdfjs/pdf.min.mjs';
+const PDFJS_WORKER_URL = 'vendor/pdfjs/pdf.worker.min.mjs';
+let pdfjs = null;
+
+/** 1.8MB，只在真的要匯入時才載入，平常開 App 不用付這個代價 */
+async function loadPdfjs() {
+  if (pdfjs) return pdfjs;
+  pdfjs = await import(new URL(PDFJS_URL, location.href).href);
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(PDFJS_WORKER_URL, location.href).href;
+  return pdfjs;
+}
+
+function savedPdfPasswords() {
+  try { return JSON.parse(localStorage.getItem(LS.pdfPasswords) || '[]'); } catch (err) { return []; }
+}
+
+/** 券商和銀行的密碼不一樣，所以記一小串，新的排前面 */
+function rememberPdfPassword(password) {
+  const list = [password, ...savedPdfPasswords().filter((p) => p !== password)].slice(0, 5);
+  try { localStorage.setItem(LS.pdfPasswords, JSON.stringify(list)); } catch (err) { /* 無妨 */ }
+}
+
+/** 依序試：剛輸入的、沒有密碼、記住的那幾組。全部不對就回 null，交給畫面去問 */
+async function openPdf(bytes, typed) {
+  const lib = await loadPdfjs();
+  const tries = [...new Set([typed, '', ...savedPdfPasswords()].filter((p) => typeof p === 'string'))];
+  for (const password of tries) {
+    try {
+      // pdf.js 會把傳進去的 buffer 轉給 worker，原本那份就空了 —— 每試一次都要給新的一份
+      const doc = await lib.getDocument({ data: bytes.slice(), password, isEvalSupported: false }).promise;
+      return { doc, password };
+    } catch (err) {
+      if (err && err.name === 'PasswordException') continue;
+      throw err;
+    }
+  }
+  return null;
+}
+
+/** 每一段文字和它在頁面上的位置。y 是由下往上數的 */
+async function pdfItems(doc) {
+  const out = [];
+  for (let n = 1; n <= doc.numPages; n++) {
+    const page = await doc.getPage(n);
+    const content = await page.getTextContent();
+    for (const it of content.items) {
+      const s = (it.str || '').trim();
+      if (s) out.push({ page: n, x: it.transform[4], y: it.transform[5], w: it.width, s });
+    }
+  }
+  return out;
+}
+
+const nearY = (a, b, tol = 2.5) => Math.abs(a - b) <= tol;
+const centerX = (item) => item.x + item.w / 2;
+
+/**
+ * 表格的一列 → { 欄名: [值…] }，值對到水平位置最近的欄名。
+ *
+ * 表頭常是上下兩層疊在同一格（申購日期／分配日期），資料也是上下兩行：
+ * 上面那行只對上層和單層的欄名，下面那行只對下層的。
+ */
+function mapRow(header, rowItems, anchorY) {
+  const ys = header.map((h) => h.y);
+  const top = Math.max(...ys);
+  const bottom = Math.min(...ys);
+  const twoLevel = top - bottom > 6;
+  const level = (h) => {
+    if (!twoLevel) return 'mid';
+    if (nearY(h.y, top)) return 'top';
+    if (nearY(h.y, bottom)) return 'bottom';
+    return 'mid';
+  };
+
+  const rec = {};
+  for (const item of rowItems) {
+    const upper = nearY(item.y, anchorY, 3);
+    const cands = header.filter((h) => (upper ? level(h) !== 'bottom' : level(h) !== 'top'));
+    if (!cands.length) continue;
+    const cx = centerX(item);
+    const best = cands.reduce((a, b) => (Math.abs(centerX(b) - cx) < Math.abs(centerX(a) - cx) ? b : a));
+    (rec[best.s] = rec[best.s] || []).push(item.s);
+  }
+  return rec;
+}
+
+const firstOf = (rec, label) => ((rec[label] || [])[0] || '').trim();
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** 民國年：113/01/02 → 2024-01-02 */
+function rocDate(text) {
+  const m = /^(\d{2,3})\/(\d{1,2})\/(\d{1,2})$/.exec(text || '');
+  return m ? `${Number(m[1]) + 1911}-${pad2(m[2])}-${pad2(m[3])}` : '';
+}
+
+/** 「TWD 1,234.00」「$ -500」→ { cur, n } */
+function moneyOf(text) {
+  const m = /^([A-Z]{3})?\s*\$?\s*(-?[\d,]+(?:\.\d+)?)$/.exec((text || '').trim());
+  return m ? { cur: m[1] || '', n: parseNum(m[2]) } : { cur: '', n: 0 };
+}
+
+/** 外幣的金額換成台幣。台幣帳戶扣款，存錢筒的金額一律記台幣 */
+const inTwd = (money, rate) => (money.cur && money.cur !== 'TWD' ? Math.round(money.n * rate) : money.n);
+
+/* ---------- 合作金庫：基金交易報告書 ---------- */
+
+/**
+ * 一份報告書裡有好幾段「…通知」，每段一張表。
+ * 每一筆從最左邊的六位數序號開始，佔上下兩行。
+ */
+function bankSections(items) {
+  const out = [];
+  for (const page of new Set(items.map((i) => i.page))) {
+    const its = items.filter((i) => i.page === page);
+    const titles = its.filter((i) => /通知$/.test(i.s) && i.s.length <= 12).sort((a, b) => b.y - a.y);
+    // 頁尾的「１、國內基金下單…」那串說明不是表格
+    const foot = Math.max(-Infinity, ...its.filter((i) => /^[１1]、/.test(i.s)).map((i) => i.y));
+
+    titles.forEach((title, k) => {
+      const floor = k + 1 < titles.length ? titles[k + 1].y : foot;
+      const body = its.filter((i) => i.y < title.y - 1 && i.y > floor + 1);
+      const anchors = body.filter((i) => /^\d{6}$/.test(i.s) && i.x < 60).sort((a, b) => b.y - a.y);
+      if (!anchors.length) return;
+
+      const header = body.filter((i) => i.y > anchors[0].y + 4);
+      const records = anchors.map((a, j) => {
+        const next = anchors[j + 1];
+        const row = body.filter((i) => i.y <= a.y + 3 && i.y > (next ? next.y + 3 : a.y - 14));
+        return mapRow(header, row, a.y);
+      });
+      out.push({ title: title.s, records });
+    });
+  }
+  return out;
+}
+
+function bankItems(items) {
+  const out = [];
+  for (const sec of bankSections(items)) {
+    if (sec.title === '基金申購分配通知') {
+      for (const r of sec.records) {
+        const rate = parseNum(firstOf(r, '兌換匯率')) || 1;
+        const amount = inTwd(moneyOf(firstOf(r, '申購金額')), rate);
+        const fee = inTwd(moneyOf(firstOf(r, '申購手續費')), rate);
+        out.push({
+          kind: 'trade', category: FUND, action: BUY,
+          code: firstOf(r, '基金代碼'), name: firstOf(r, '基金名稱'),
+          // 記帳基準一律用申購日，不用分配日
+          date: rocDate(firstOf(r, '申購日期')),
+          style: /定期|小額/.test(firstOf(r, '投資型態')) ? '小額' : '單筆',
+          qty: parseNum(firstOf(r, '購得單位數')),
+          price: parseNum(firstOf(r, '申購價格')),
+          rate, amount, fee, cash: amount + fee, note: '',
+        });
+      }
+    }
+    if (sec.title === '基金除息通知') {
+      for (const r of sec.records) {
+        const gross = parseNum(firstOf(r, '配息金額'));
+        out.push({
+          kind: 'dividend', category: FUND,
+          code: firstOf(r, '基金代碼'), name: firstOf(r, '基金名稱'),
+          exDate: rocDate(firstOf(r, '基準日期')),    // 基準日＝除息日
+          payDate: rocDate(firstOf(r, '分配日期')),   // 分配日＝發放日
+          units: parseNum(firstOf(r, '受益權單位數')),
+          perUnit: parseNum(firstOf(r, '每單位分配金額')),
+          rate: parseNum(firstOf(r, '匯率')) || 1,
+          received: parseNum(firstOf(r, '給付淨額')) || gross,
+          note: '',
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/* ---------- 台新證券：成交資料 ---------- */
+
+/**
+ * 主表格有價格、手續費、交易稅，但股票名稱被截斷又折成三行、沒有代號；
+ * 下面的「今日成交資料彙總」有代號。兩張表的順序一樣，照順序配對。
+ *
+ * 賣出的交易稅照使用者一直以來的記法：併進手續費欄，備註寫「手續費○○+交易稅○○」。
+ */
+function brokerItems(items) {
+  const out = [];
+  const text = items.map((i) => i.s).join(' ');
+  const d = /民國\s*(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/.exec(text);
+  if (!d || !/成交資料/.test(text)) return out;
+  const date = `${Number(d[1]) + 1911}-${pad2(d[2])}-${pad2(d[3])}`;
+
+  for (const page of new Set(items.map((i) => i.page))) {
+    const its = items.filter((i) => i.page === page);
+    const kindHead = its.find((i) => i.s === '類別');
+    if (!kindHead) continue;
+
+    // 表頭是「類別」那一帶上下幾行；每一列從「現買／現賣」開始
+    const header = its.filter((i) => Math.abs(i.y - kindHead.y) <= 8 && i.x > kindHead.x + 5);
+    const anchors = its
+      .filter((i) => /[買賣]$/.test(i.s) && i.s.length <= 4 && Math.abs(i.x - kindHead.x) < 8 && i.y < kindHead.y)
+      .sort((a, b) => b.y - a.y);
+
+    const summary = its
+      .filter((i) => /^[0-9A-Z]{4,6}\s*\(.+\)$/.test(i.s))
+      .sort((a, b) => b.y - a.y);
+
+    anchors.forEach((a, j) => {
+      const r = mapRow(header, its.filter((i) => nearY(i.y, a.y, 2) && i.x > a.x + 5), a.y);
+      const sum = summary[j];
+      const m = sum ? /^([0-9A-Z]{4,6})\s*\((.+)\)$/.exec(sum.s) : null;
+      const isSell = /賣/.test(a.s);
+      const amount = parseNum(firstOf(r, '價金'));
+      const fee = parseNum(firstOf(r, '手續費'));
+      const tax = parseNum(firstOf(r, '交易稅'));
+      const net = Math.abs(parseNum(firstOf(r, '應收付')));
+
+      out.push({
+        kind: 'trade', category: ETF, action: isSell ? SELL : BUY,
+        code: m ? m[1] : '', name: m ? m[2] : '',
+        date, style: '',
+        qty: parseNum(firstOf(r, '數量')),
+        price: parseNum(firstOf(r, '成交價')),
+        rate: 1, amount,
+        fee: fee + tax,
+        cash: net || (isSell ? amount - fee - tax : amount + fee),
+        note: tax ? `手續費${fee}+交易稅${tax}` : '',
+      });
+    });
+  }
+  return out;
+}
+
+/** 認得的單據都試一遍，各自只會對自己的格式有反應 */
+function parseStatement(items) {
+  return [...bankItems(items), ...brokerItems(items)]
+    .filter((it) => it.code && (it.kind === 'dividend' ? it.received : it.qty));
+}
+
+/**
+ * 對到 App 裡的標的、補上單據沒寫的東西、看看是不是已經記過了。
+ * 每次畫清單都重算，存完一筆回來，那一筆就會自己變成「已經記過」。
+ */
+function resolveImport(item) {
+  // 銀行印的是縮寫過的基金名，跟 App 裡自己取的名字對不上 —— 用代碼對
+  const inst = live('instruments').find((i) => i.type === item.category && String(i.code || '').trim() === item.code);
+  const out = { ...item, instrumentId: inst ? inst.id : '', displayName: inst ? inst.name : item.name };
+
+  if (inst && item.kind === 'trade' && !item.style) {
+    // ETF 的單據沒寫是定期定額還是自己下單 —— 沿用上次記這一檔時選的
+    const last = live('trades')
+      .filter((t) => t.instrumentId === inst.id && t.style)
+      .sort((a, b) => sortKey(b.date).localeCompare(sortKey(a.date)))[0];
+    out.style = last ? last.style : '單筆';
+  }
+
+  if (inst && item.kind === 'dividend') {
+    // 除息通知沒寫是單筆還是定期定額那一邊的配息，用「當天持有幾單位」去對
+    out.style = ['小額', '單筆'].find((st) => Math.abs(unitsHeldAt(inst.id, item.exDate, st) - item.units) < 0.01) || '';
+  }
+
+  out.done = !!inst && (item.kind === 'trade'
+    ? live('trades').some((t) => t.instrumentId === inst.id && t.date === item.date
+      && t.action === item.action && Math.abs(Number(t.quantity) - item.qty) < 1e-4)
+    : live('dividends').some((d) => d.instrumentId === inst.id
+      && (d.exDate === item.exDate || d.payDate === item.payDate)
+      && Math.abs(Number(d.received) - item.received) < 1));
+  return out;
+}
+
+/* ---------- 匯入面板 ---------- */
+
+const importState = { name: '', bytes: null, items: [], status: '', needPassword: false, busy: false };
+
+function openImportSheet() {
+  renderImport();
+  openSheet('import-sheet');
+}
+
+async function importFile(file) {
+  Object.assign(importState, {
+    name: file.name, bytes: new Uint8Array(await file.arrayBuffer()),
+    items: [], status: '讀取中…', needPassword: false,
+  });
+  $('import-pw').value = '';
+  openImportSheet();
+  await readImport();
+}
+
+async function readImport(typed) {
+  importState.busy = true;
+  renderImport();
+  try {
+    const opened = await openPdf(importState.bytes, typed);
+    if (!opened) {
+      importState.needPassword = true;
+      importState.status = typed ? '密碼不對，再試一次。' : '這份 PDF 有密碼。';
+    } else {
+      if (typed && $('import-remember').checked) rememberPdfPassword(typed);
+      importState.needPassword = false;
+      importState.items = parseStatement(await pdfItems(opened.doc));
+      importState.status = importState.items.length
+        ? ''
+        : '這份 PDF 裡沒有認得的交易。目前認得：合作金庫的基金申購、除息通知，台新證券的成交資料。';
+    }
+  } catch (err) {
+    importState.status = `讀不了這份 PDF：${err.message || err}`;
+  }
+  importState.busy = false;
+  renderImport();
+  if (importState.needPassword) $('import-pw').focus();
+}
+
+function importEntryHtml(it, i) {
+  const isTrade = it.kind === 'trade';
+  const tag = isTrade ? (it.action === SELL ? 'sell' : 'buy') : 'div';
+  const tagText = isTrade ? (it.action === SELL ? '賣' : '買') : '息';
+
+  const meta = isTrade
+    ? [fmtDate(it.date), fmtQty(it.category, it.qty), it.price ? `@ ${fmtNum(it.price, 4)}` : '',
+      it.style ? styleLabel(it.style, it.category) : ''].filter(Boolean).join(' · ')
+    : [`除息 ${fmtDate(it.exDate)}`, `${fmtNum(it.units, 4)} 單位`,
+      it.style ? styleLabel(it.style, it.category) : ''].filter(Boolean).join(' · ');
+
+  const money = isTrade ? it.cash : it.received;
+  const sign = isTrade && it.action !== SELL ? '−' : '+';
+
+  let badge = '';
+  if (it.done) badge = '<span class="entry__badge import__badge--done">已經記過</span>';
+  else if (!it.instrumentId) badge = `<span class="entry__badge import__badge--warn">App 裡沒有 ${escapeHtml(it.code)}</span>`;
+  else if (it.kind === 'dividend' && !it.style) badge = '<span class="entry__badge import__badge--warn">持有單位對不上</span>';
+
+  return `
+    <button class="entry import__item ${it.done ? 'is-done' : ''}" type="button" data-import="${i}">
+      <span class="entry__tag entry__tag--${tag}">${tagText}</span>
+      <span class="entry__body">
+        <span class="entry__name">${escapeHtml(it.displayName || it.name)}${badge}</span>
+        <span class="entry__meta">${escapeHtml(meta)}</span>
+      </span>
+      <span class="entry__amount ${sign === '+' ? 'entry__amount--in' : 'entry__amount--out'}">${sign}${fmtMoney(money).replace('−', '')}</span>
+    </button>`;
+}
+
+function renderImport() {
+  const items = importState.items.map(resolveImport);
+  const fresh = items.filter((it) => !it.done).length;
+
+  $('import-file-name').textContent = importState.name;
+  $('import-password').hidden = !importState.needPassword;
+
+  let status = importState.busy ? '讀取中…' : importState.status;
+  if (!importState.busy && items.length) {
+    status = fresh
+      ? `讀到 ${items.length} 筆，${fresh} 筆還沒記${items.length - fresh ? `，${items.length - fresh} 筆已經記過` : ''}。`
+      : `讀到 ${items.length} 筆，都已經記過了。`;
+  }
+  $('import-status').textContent = status;
+  $('import-list').innerHTML = items.map(importEntryHtml).join('');
+  $('import-hint').hidden = !fresh;
+  $('btn-import-again').hidden = importState.busy || importState.needPassword;
+}
+
+function openImportItem(i) {
+  const it = resolveImport(importState.items[i]);
+  if (it.done) return toast('這筆已經記過了');
+
+  state.returnToImport = true;
+  const prefill = { ...it, fromImport: true, instrumentId: it.instrumentId };
+  if (it.kind === 'trade') openTradeSheet({ category: it.category, action: it.action, prefill });
+  else openDividendSheet({ category: it.category, prefill });
+}
+
 function applyTheme() {
   // 照片主題是自己一種底，不跟著系統的明暗走
   const PHOTO_THEMES = { haze: '#16241c', forest: '#1a2a22', pink: '#f7dcdc' };
@@ -3797,6 +4220,24 @@ function bindEvents() {
   });
   $('rp-pie').addEventListener('focusout', (e) => {
     if (pieTarget(e)) hidePieTip();
+  });
+
+  // ---- 從對帳單 PDF 匯入 ----
+  $('btn-import-pdf').addEventListener('click', () => $('import-file').click());
+  $('btn-import-again').addEventListener('click', () => $('import-file').click());
+  $('import-file').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';   // 清掉，同一個檔案再選一次也會觸發
+    if (file) importFile(file);
+  });
+  $('import-password').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const pw = $('import-pw').value;
+    if (pw) readImport(pw);
+  });
+  $('import-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-import]');
+    if (btn) openImportItem(Number(btn.dataset.import));
   });
 
   // ---- 持股頁 ----

@@ -127,6 +127,16 @@
         </div>
       </div>
 
+      <!-- 對帳單 PDF：讀出來、把表單填好，確認了才存。檔案不會離開這台手機 -->
+      <button class="btn btn--quote btn--block import-btn" id="btn-import-pdf" type="button">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+          <path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M14 3v5h5M9 13h6M9 17h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>從對帳單 PDF 匯入</span>
+      </button>
+      <input type="file" id="import-file" accept="application/pdf,.pdf" hidden>
+
       <!-- 最近紀錄 -->
       <p class="section-title" id="recent-title">最近紀錄</p>
       <div class="entries" id="recent-list"></div>
@@ -881,6 +891,42 @@
 </div>
 
 <!-- ========== 更新現價 ========== -->
+<!-- ========== 從對帳單 PDF 匯入 ========== -->
+<div class="sheet" id="import-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="import-sheet-title">
+  <div class="sheet__grip" aria-hidden="true"></div>
+
+  <div class="sheet__head">
+    <button class="sheet__cancel" data-close type="button">關閉</button>
+    <h2 class="sheet__title" id="import-sheet-title">從對帳單匯入</h2>
+    <span class="sheet__head-gap" aria-hidden="true"></span>
+  </div>
+
+  <div class="sheet__body">
+    <p class="import__file" id="import-file-name"></p>
+
+    <p class="import__status" id="import-status"></p>
+
+    <!-- 對帳單多半有密碼。記住的話只存在這台手機，下次同一家的單據自動打開 -->
+    <form class="import__password" id="import-password" hidden novalidate>
+      <label class="field">
+        <span class="field__label">PDF 密碼</span>
+        <input class="input" id="import-pw" type="password" autocomplete="off" inputmode="text">
+      </label>
+      <label class="toggle toggle--inline">
+        <input type="checkbox" id="import-remember" checked>
+        <span class="toggle__box" aria-hidden="true"></span>
+        <span>記住這個密碼（只存在這台手機）</span>
+      </label>
+      <button class="btn btn--submit" type="submit">打開</button>
+    </form>
+
+    <div class="ledger-list" id="import-list"></div>
+    <p class="hint" id="import-hint" hidden>點一筆會打開填好的表單，看過沒問題再按儲存。</p>
+
+    <button class="btn btn--block import__again" id="btn-import-again" type="button" hidden>換一份 PDF</button>
+  </div>
+</div>
+
 <div class="sheet" id="price-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="price-sheet-title">
   <div class="sheet__grip" aria-hidden="true"></div>
 

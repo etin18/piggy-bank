@@ -7,3 +7,14 @@ www/_snapshot*
 
 # 開發筆記只留在本機（repo 是公開的）
 開發筆記.md
+
+# 對帳單 PDF（真實的財務資料，repo 是公開的）。
+# 匯入功能的測試會讀本機的這些檔，但它們絕對不能進版控
+*.pdf
+
+# 照片主題的原圖（App 用的是 www/ 裡縮小過的版本）
+/pink.jpg
+/yudai-*.jpg
+
+# PDF 匯入測試的期望值：照對帳單抄的，就是真實的交易紀錄
+scripts/*.local.json

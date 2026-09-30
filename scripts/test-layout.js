@@ -36,13 +36,14 @@ function findChromium() {
 
 /* ---------- 故意很長的資料 ---------- */
 
-const LONG = '富蘭克林坦伯頓全球投資系列－科技基金美元A累積型';
+// 全部是虛構的標的和數字 —— repo 是公開的，測試資料不能照抄使用者的持股或成交價
+const LONG = '虛構全球投資系列－長名字測試基金美元累積型超長名稱';
 const instruments = [
-  { id: 'e1', code: '00400A', name: '主動國泰動能高息', type: 'ETF', currency: 'TWD', frequency: '季配', status: '持有中' },
-  { id: 'e2', code: '006208', name: '富邦台灣采吉50', type: 'ETF', currency: 'TWD', frequency: '半年配', status: '持有中' },
-  { id: 'e3', code: '00991A', name: '主動復華未來50', type: 'ETF', currency: 'TWD', frequency: '不配息', status: '持有中' },
-  { id: 'f1', code: '0809', name: LONG, type: '基金', currency: 'USD', frequency: '月配', status: '持有中' },
-  { id: 'f2', code: '0428', name: '安聯收益成長基金－AM穩定月收類股（美元）', type: '基金', currency: 'TWD', frequency: '月配', status: '持有中' },
+  { id: 'e1', code: 'T001A', name: '測試高股息動能主動型', type: 'ETF', currency: 'TWD', frequency: '季配', status: '持有中' },
+  { id: 'e2', code: 'T0002', name: '測試市值型指數五十', type: 'ETF', currency: 'TWD', frequency: '半年配', status: '持有中' },
+  { id: 'e3', code: 'T003A', name: '測試未來科技主動型', type: 'ETF', currency: 'TWD', frequency: '不配息', status: '持有中' },
+  { id: 'f1', code: 'X901', name: LONG, type: '基金', currency: 'USD', frequency: '月配', status: '持有中' },
+  { id: 'f2', code: 'X902', name: '虛構收益成長基金－穩定月收類股（美元）', type: '基金', currency: 'TWD', frequency: '月配', status: '持有中' },
 ];
 const trades = [];
 const dividends = [];
@@ -50,7 +51,7 @@ let n = 0;
 for (const inst of instruments) {
   for (const [date, style] of [['2026-01-05', '小額'], ['2026-03-05', '單筆'], ['2026-06-05', '小額']]) {
     const qty = inst.type === 'ETF' ? 1234 : 123.4567;
-    const price = inst.type === 'ETF' ? 106.88 : 63.9812;
+    const price = inst.type === 'ETF' ? 88.88 : 12.3456;
     trades.push({
       id: 't' + (++n), instrumentId: inst.id, date, action: '買進', style,
       quantity: qty, price, rate: 1, amount: Math.round(qty * price), fee: 25,
