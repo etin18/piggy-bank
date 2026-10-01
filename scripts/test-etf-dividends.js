@@ -37,9 +37,9 @@ const day = (offset) => {
 };
 
 /*
- * T001A：一直持有 2,000 股。三期公告：
- *   60 天前除息（已經記了）、30 天前除息 10 天前發放（沒記 → 要能記、漏記提醒要講）、
- *   10 天後除息（金額待公告）
+ * T001A：一直持有 2,000 股。四期公告：
+ *   75 天前除息（記了，但超過兩個月 → 行事曆不列）、45 天前除息（已經記了）、
+ *   30 天前除息 10 天前發放（沒記 → 要能記、漏記提醒要講）、10 天後除息（金額待公告）
  * T002：44 天前才買 —— 45 天前那期領不到，不該列；15 天前那期 5 天後才發，列出但還不能記
  * T003：從來不配息，公告是空的 —— 不能再被「一次都沒領過」追著問
  */
@@ -55,7 +55,8 @@ const SEED = {
     { id: 't3', instrumentId: 'c', date: day(-300), action: '買進', style: '單筆', quantity: 1000, price: 15, rate: 1, amount: 15000, fee: 21, cash: 15021, note: '' },
   ],
   dividends: [
-    { id: 'd1', instrumentId: 'a', code: 'T001A', style: '', exDate: day(-60), payDate: day(-39), perUnit: 0.5, units: 2000, received: 990, note: '' },
+    { id: 'd1', instrumentId: 'a', code: 'T001A', style: '', exDate: day(-45), payDate: day(-24), perUnit: 0.5, units: 2000, received: 990, note: '' },
+    { id: 'd0', instrumentId: 'a', code: 'T001A', style: '', exDate: day(-75), payDate: day(-54), perUnit: 0.5, units: 2000, received: 990, note: '' },
   ],
   cashflows: [], prices: [],
 };
@@ -64,7 +65,9 @@ const OFFICIAL = {
   T001A: [
     { exDate: day(10), recordDate: day(16), payDate: day(30), perUnit: null },
     { exDate: day(-30), recordDate: day(-24), payDate: day(-10), perUnit: 0.5 },
-    { exDate: day(-60), recordDate: day(-54), payDate: day(-40), perUnit: 0.5 },
+    { exDate: day(-45), recordDate: day(-39), payDate: day(-25), perUnit: 0.5 },
+    // 除息超過兩個月 —— 行事曆不列（使用者記過了，漏記提醒也不會講）
+    { exDate: day(-75), recordDate: day(-69), payDate: day(-55), perUnit: 0.5 },
   ],
   T002: [
     { exDate: day(-15), recordDate: day(-9), payDate: day(5), perUnit: 0.3 },
@@ -153,7 +156,7 @@ function check(name, ok, detail = '') {
   )));
   console.log('    ' + rows.join('\n    '));
   const names = rows.filter((r) => r !== '—今天—');
-  check('只列除息前有持有的（T002 45 天前那期不列）', names.length === 4, `${names.length} 列`);
+  check('只列兩個月內除息、除息前有持有的（T001A 75 天前、T002 45 天前那期不列）', names.length === 4, `${names.length} 列`);
   const exOrder = await page.evaluate(() => divCalShown.map((e) => e.row.exDate));
   check('照除息日先後排', exOrder.every((d, i) => i === 0 || exOrder[i - 1] <= d), exOrder.join(' '));
   check('「今天」在已除息和還沒除息之間', rows.indexOf('—今天—') === 3, `在第 ${rows.indexOf('—今天—') + 1} 個`);
@@ -192,7 +195,7 @@ function check(name, ok, detail = '') {
   console.log('\n── 首頁的漏記提醒也能直接記 ──');
   // 把剛記的那筆刪掉，讓它回到「沒記」
   await page.evaluate(() => {
-    const d = live('dividends').find((x) => x.received === 990 && x.id !== 'd1');
+    const d = live('dividends').find((x) => x.received === 990 && !['d0', 'd1'].includes(x.id));
     remove('dividends', d.id);
   });
   await page.waitForTimeout(500);

@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v32';
+const APP_VERSION = 'v33';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -3874,8 +3874,8 @@ function bindBlockDrag(list) {
      漏記提醒：公告涵蓋的那一年直接拿公告對，不用再照頻率猜
    ========================================================================== */
 
-/** 行事曆往回看幾天：最近幾期還沒記的要看得到，太久以前的就不列了 */
-const DIVCAL_LOOKBACK_DAYS = 90;
+/** 行事曆往回看幾個月（以除息日算）。三個月列起來太長，使用者要的是最近兩個月 */
+const DIVCAL_LOOKBACK_MONTHS = 2;
 
 function addDays(ymd, n) {
   const [y, m, d] = String(ymd).split('-').map(Number);
@@ -3951,12 +3951,12 @@ async function refreshEtfDividends({ quiet = false } = {}) {
 }
 
 /**
- * 行事曆的每一列：照除息日排，最近 90 天到未來。
+ * 行事曆的每一列：照除息日排，最近兩個月（以除息日算）到未來。
  * 除息前一天沒持有的那期領不到，就不列 —— 不相干的列只會讓人找不到重點。
  */
 function divCalendarEntries() {
   const today = todayStr();
-  const from = addDays(today, -DIVCAL_LOOKBACK_DAYS);
+  const from = toYmd(addMonths(today, -DIVCAL_LOOKBACK_MONTHS));
   const out = [];
 
   for (const inst of live('instruments').filter((i) => i.type === ETF)) {
