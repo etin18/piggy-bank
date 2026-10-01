@@ -213,6 +213,36 @@ function check(name, ok, detail = '') {
   const masked = await page.locator('#divcal-list').innerText();
   check('行事曆的金額也遮住', !/\$\d/.test(masked), masked.slice(0, 80));
 
+  console.log('\n── 代號掉了前面的 0 ──');
+  // 試算表曾經把代號當數字存：0077 變成 77。換一台裝置重新帶資料，拿到的就是 77
+  await page.evaluate(() => { state.privacy = false; });
+  const lost = {
+    inst: { id: 'z', code: '77', name: '測試掉零', type: 'ETF', currency: 'TWD', frequency: '季配', status: '持有中' },
+    trade: { id: 'tz', instrumentId: 'z', date: day(-200), action: '買進', style: '單筆', quantity: 500, price: 30, rate: 1, amount: 15000, fee: 21, cash: 15021, note: '' },
+    ghost: { id: 'g', code: 'T009', name: '測試沒抓到', type: 'ETF', currency: 'TWD', frequency: '月配', status: '持有中' },
+    ghostTrade: { id: 'tg', instrumentId: 'g', date: day(-200), action: '買進', style: '單筆', quantity: 100, price: 10, rate: 1, amount: 1000, fee: 1, cash: 1001, note: '' },
+  };
+  server.instruments.push(lost.inst, lost.ghost);
+  server.trades.push(lost.trade, lost.ghostTrade);
+  // 後端照補過零的代號回；T009 這次沒抓到（不在回應裡）
+  OFFICIAL['0077'] = [{ exDate: day(-20), recordDate: day(-14), payDate: day(8), perUnit: 0.7 }];
+  const asked = [];
+  page.on('request', (r) => { if (r.url() === API && /etfDividends/.test(r.postData() || '')) asked.push(JSON.parse(r.postData()).codes); });
+  await page.evaluate((l) => {
+    state.instruments.push({ ...l.inst, _synced: true }, { ...l.ghost, _synced: true });
+    state.trades.push({ ...l.trade, _synced: true }, { ...l.ghostTrade, _synced: true });
+    saveLocal();
+    state.etfDiv = { fetchedAt: '', byCode: {} };
+    render();
+  }, lost);
+  await page.locator('#btn-divcal-refresh').click();
+  await page.waitForTimeout(800);
+  check('查詢時自動補成 0077', (asked[0] || []).includes('0077') && !(asked[0] || []).includes('77'), JSON.stringify(asked[0]));
+  const calText = await page.locator('#divcal-list').innerText();
+  check('掉零的那檔照樣列出來', /測試掉零/.test(calText), calText.slice(0, 120));
+  check('名稱後面有代號', /測試掉零\s*0077/.test(calText) && /測試高息動能\s*T001A/.test(calText));
+  check('持有中卻沒抓到公告的，講出是哪一檔', /沒抓到公告：T009/.test(calText), calText.slice(-80));
+
   check('沒有 JS 錯誤', !errors.length, errors.join('；'));
   await browser.close();
 

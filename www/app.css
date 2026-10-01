@@ -1321,21 +1321,37 @@ button, input, select, textarea {
 .divcal__refresh { padding: 6px 12px; font-size: 13px; }
 
 .divcal__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 12px;
   padding: 10px 0;
   border-top: 1px solid var(--border);
 }
+/* 上下兩行各自排：名稱只跟金額搶寬度、日期只跟每股搶。
+   原本是同一個 grid，右下的「每股 4.75 × 22 股」會把整個右欄撐寬，名稱被擠成「富邦台…」 */
+.divcal__line { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.divcal__line + .divcal__line { margin-top: 2px; }
+.divcal__line > :last-child { flex: none; }
 .divcal__row:first-child,
 .divcal__today + .divcal__row { border-top: 0; }
-.divcal__name { font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 名稱太長先截名稱，代號和配息頻率一定看得到 */
+.divcal__name { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1; }
+.divcal__nm { min-width: 0; font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.divcal__code { flex: none; font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+.divcal__freq {
+  flex: none;
+  align-self: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
 .divcal__amt { text-align: right; font-size: 15px; font-variant-numeric: tabular-nums; }
 .divcal__pending { color: var(--accent-deep); }
+.divcal__dates { min-width: 0; }
 .divcal__dates,
 .divcal__per { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .divcal__per { text-align: right; }
-.divcal__act { grid-column: 1 / -1; display: flex; justify-content: flex-end; margin-top: 4px; }
+.divcal__act { display: flex; justify-content: flex-end; margin-top: 4px; }
 .divcal__done { color: var(--good); font-weight: 600; }
 .divcal__rec {
   padding: 5px 14px;

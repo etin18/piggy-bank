@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v31';
+const APP_VERSION = 'v32';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -3489,6 +3489,21 @@ async function fetchQuotes(codes) {
   return data.quotes || {};
 }
 
+/**
+ * 拿去證交所查的代號。
+ *
+ * 試算表曾經把代號當數字存，前面的 0 會被吃掉：00929 變 929、0056 變 56。
+ * 本機記得完整代號的裝置看起來正常，但換一台裝置從試算表重新帶資料，拿到的就是 929，
+ * 現價和配息都查不到，而且不會報錯。台股 ETF 的代號一定是「00」開頭，所以沒有的就補上。
+ */
+function etfCode(inst) {
+  const code = String((inst && inst.code) || '').trim().toUpperCase();
+  if (inst && inst.type === ETF && /^\d{1,4}[A-Z]?$/.test(code) && !code.startsWith('00')) {
+    return ('00' + code.replace(/^0+/, '')).replace(/^0{3,}/, '00');
+  }
+  return code;
+}
+
 /** 目前持有、而且填了代號的 ETF —— 沒代號查不了，沒持股也不需要 */
 function quotableEtfs() {
   return heldPositions()
@@ -3510,7 +3525,7 @@ async function refreshEtfPrices() {
   $('quote-btn-text').textContent = '查詢中…';
 
   try {
-    const quotes = await fetchQuotes(targets.map((i) => i.code));
+    const quotes = await fetchQuotes(targets.map(etfCode));
 
     const failed = [];
     let updated = 0;
@@ -3518,7 +3533,7 @@ async function refreshEtfPrices() {
     let time = '';
 
     for (const inst of targets) {
-      const quote = quotes[String(inst.code).trim().toUpperCase()];
+      const quote = quotes[etfCode(inst)];
       if (!quote || !quote.price) {
         failed.push(inst.code);
         continue;
@@ -3561,7 +3576,7 @@ async function fetchOnePrice() {
   const inst = instrumentById(state.draft.priceId);
   if (!inst) return;
 
-  const code = String(inst.code || '').trim();
+  const code = etfCode(inst);
   if (!code) return showError('price-error', '這檔沒有填代號，請手動輸入價格');
 
   const btn = $('btn-fetch-price');
@@ -3878,7 +3893,7 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000)
  */
 function officialDividends(inst) {
   if (!inst || inst.type !== ETF) return null;
-  const code = String(inst.code || '').trim().toUpperCase();
+  const code = etfCode(inst);
   const rows = state.etfDiv.byCode[code];
   if (!code || !Array.isArray(rows) || !state.etfDiv.fetchedAt) return null;
 
@@ -3901,8 +3916,8 @@ function recordedDividend(inst, row) {
 /** 要抓哪幾檔：有代號的 ETF，包括出清的（漏記提醒要對得到出清前那幾期） */
 function etfCodesForDividends() {
   return [...new Set(live('instruments')
-    .filter((i) => i.type === ETF && String(i.code || '').trim())
-    .map((i) => String(i.code).trim().toUpperCase()))];
+    .filter((i) => i.type === ETF && etfCode(i))
+    .map(etfCode))];
 }
 
 async function refreshEtfDividends({ quiet = false } = {}) {
@@ -3960,6 +3975,20 @@ function divCalendarEntries() {
 
 let divCalShown = [];
 
+/**
+ * 月配、季配、半年配…。標的上填的優先；沒填的話，從公告的除息間隔推：
+ * 相鄰兩期的間隔取中位數，1 個月左右是月配、3 個月季配，依此類推。
+ */
+function divFrequency(inst) {
+  if (inst.frequency && inst.frequency !== '不配息') return inst.frequency;
+  const official = officialDividends(inst);
+  const dates = official ? official.rows.map((r) => r.exDate).sort() : [];
+  if (dates.length < 2) return '';
+  const gaps = dates.slice(1).map((d, i) => ymNumber(d) - ymNumber(dates[i])).sort((a, b) => a - b);
+  const mid = gaps[Math.floor(gaps.length / 2)];
+  return mid <= 1 ? '月配' : mid <= 4 ? '季配' : mid <= 8 ? '半年配' : '年配';
+}
+
 function renderDivCalendar() {
   const card = $('divcal-card');
   const hasEtf = etfCodesForDividends().length > 0;
@@ -3973,8 +4002,17 @@ function renderDivCalendar() {
     : '還沒抓過。按「更新」從證交所抓配息公告，更新 ETF 現價時也會一起抓。';
 
   divCalShown = divCalendarEntries();
+
+  // 持有中、卻沒有這一檔的公告 —— 多半是這次沒抓到，不講的話使用者會以為它這期沒配
+  const missing = fetched
+    ? heldPositions().filter((p) => p.type === ETF && !officialDividends(p.instrument)).map((p) => etfCode(p.instrument))
+    : [];
+  const missingNote = missing.length
+    ? `<p class="hint hint--warn">這幾檔沒抓到公告：${escapeHtml(missing.join('、'))}。按「更新」再試一次。</p>`
+    : '';
+
   if (fetched && !divCalShown.length) {
-    $('divcal-list').innerHTML = '<p class="hint">最近沒有你持有的 ETF 配息。</p>';
+    $('divcal-list').innerHTML = '<p class="hint">最近沒有你持有的 ETF 配息。</p>' + missingNote;
     return;
   }
 
@@ -4001,17 +4039,25 @@ function renderDivCalendar() {
 
     html += `
       <div class="divcal__row ${e.row.exDate <= today ? 'is-past' : ''}">
-        <span class="divcal__name">${escapeHtml(e.inst.name)}</span>
-        <span class="divcal__amt">${amount}</span>
-        <span class="divcal__dates">除息 ${fmtDate(e.row.exDate)} · 發放 ${fmtDate(e.row.payDate)}${done}</span>
-        <span class="divcal__per">${escapeHtml(per)}</span>
+        <div class="divcal__line">
+          <span class="divcal__name">
+            <span class="divcal__nm">${escapeHtml(e.inst.name)}</span>
+            <span class="divcal__code">${escapeHtml(etfCode(e.inst))}</span>
+            ${divFrequency(e.inst) ? `<span class="divcal__freq">${divFrequency(e.inst)}</span>` : ''}
+          </span>
+          <span class="divcal__amt">${amount}</span>
+        </div>
+        <div class="divcal__line">
+          <span class="divcal__dates">除息 ${fmtDate(e.row.exDate)} · 發放 ${fmtDate(e.row.payDate)}${done}</span>
+          <span class="divcal__per">${escapeHtml(per)}</span>
+        </div>
         ${act ? `<span class="divcal__act">${act}</span>` : ''}
       </div>`;
   });
   if (!markedToday && divCalShown.length) {
     html += `<div class="divcal__today"><span>今天 ${fmtDate(today)}</span></div>`;
   }
-  $('divcal-list').innerHTML = html;
+  $('divcal-list').innerHTML = html + missingNote;
 }
 
 /**

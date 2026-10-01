@@ -272,6 +272,9 @@ async function run() {
     locale: 'zh-TW',
     timezoneId: 'Asia/Taipei',
   });
+  // 把「今天」固定在 2026/09/30。上面的期望值是照這天手算的（今年已過 9 個月、
+  // 明細預設 1～9 月）—— 不固定的話，一跨到 10 月就有一串平均每月、期間月數對不上
+  await context.clock.setFixedTime(new Date('2026-09-30T10:00:00+08:00'));
   const page = await context.newPage();
 
   const errors = [];
@@ -1132,7 +1135,7 @@ async function run() {
   await page.locator('#ledger-range .yearbar__btn[data-range="custom"]').click();
   await page.waitForTimeout(200);
 
-  // 選項從最早一筆（2025/01）到本月（2026/09）＝ 21 個月
+  // 選項從最早一筆（2025/01）到本月（固定在 2026/09，見 run() 開頭）＝ 21 個月
   const monthOpts = await page.locator('#ledger-from option').count();
   const okOpts = monthOpts === 21;
   console.log(`  ${okOpts ? '✅' : '❌'} 自訂期間有 ${monthOpts} 個月可選${okOpts ? '' : '，應為 21'}`);
