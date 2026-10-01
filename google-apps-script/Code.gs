@@ -35,7 +35,7 @@ var SECRET = '';   // ← 改成你自己的通關密語，例如 'piggy2026kk'
  * 用來確認這份程式有沒有真的重新部署上去 ——
  * 貼了新程式卻忘了「部署 → 管理部署作業 → 新版本」的話，跑的還是舊的。
  */
-var API_VERSION = 'v20';
+var API_VERSION = 'v21';
 
 /* ==========================================================================
    資料表定義
@@ -199,6 +199,8 @@ function route(payload) {
         return { ok: true, dividends: fetchEtfDividends(payload.codes || []) };
       case 'fundNavs':
         return { ok: true, navs: fetchFundNavs(payload.navIds || []), usdTwd: fetchUsdTwd() };
+      case 'fundDividends':
+        return { ok: true, dividends: fetchFundDividends(payload.navIds || []) };
       default:
         return { ok: false, error: '未知的操作：' + action };
     }
@@ -741,6 +743,61 @@ function fetchFundNavs(navIds) {
         currency: String(item.classCurrency || ''),
         name: String(item.displayNameLocal || item.displayName || '')
       };
+    } catch (err) {
+      // 這一檔壞了不影響其他檔
+    }
+  }
+  return result;
+}
+
+/**
+ * 基金的配息紀錄（鉅亨網），最近 20 期左右。
+ * 回傳 { 淨值代碼: [ { recordDate, exDate, perUnit } ] }；不配息的回空陣列，抓不到的不放進結果。
+ *
+ * 只有已經配過的，沒有預告，也沒有發放日 —— 發放日由 App 照使用者過去的紀錄推。
+ * perUnit 是基金公司公布的金額。美國註冊的基金銀行會先扣 30% 預扣稅，
+ * 這裡不處理，由 App 拿使用者記過的配息去比，自己判斷要不要乘 0.7。
+ */
+function fetchFundDividends(navIds) {
+  var wanted = [];
+  for (var i = 0; i < navIds.length; i++) {
+    var id = String(navIds[i] || '').trim();
+    if (id && wanted.indexOf(id) === -1) wanted.push(id);
+  }
+  if (!wanted.length) return {};
+
+  var requests = wanted.map(function (id) {
+    return {
+      url: 'https://fund.api.cnyes.com/fund/api/v1/funds/' + encodeURIComponent(id) + '/dividend?page=1',
+      muteHttpExceptions: true,
+      followRedirects: true
+    };
+  });
+
+  var result = {};
+  var responses = [];
+  try {
+    responses = UrlFetchApp.fetchAll(requests);
+  } catch (err) {
+    return result;
+  }
+
+  var day = function (sec) {
+    return sec ? Utilities.formatDate(new Date(Number(sec) * 1000), 'Asia/Taipei', 'yyyy-MM-dd') : '';
+  };
+  for (var j = 0; j < wanted.length; j++) {
+    try {
+      var res = responses[j];
+      if (!res || res.getResponseCode() !== 200) continue;
+      var rows = (((JSON.parse(res.getContentText()) || {}).items || {}).data) || [];
+      var out = [];
+      for (var k = 0; k < rows.length; k++) {
+        var r = rows[k];
+        var per = Number(r.totalDistribution);
+        if (!r.recordDate || !(per >= 0)) continue;
+        out.push({ recordDate: day(r.recordDate), exDate: day(r.excludingDate), perUnit: per });
+      }
+      result[wanted[j]] = out;
     } catch (err) {
       // 這一檔壞了不影響其他檔
     }

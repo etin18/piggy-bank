@@ -244,7 +244,7 @@ function check(name, ok, detail = '') {
   const calText = await page.locator('#divcal-list').innerText();
   check('掉零的那檔照樣列出來', /測試掉零/.test(calText), calText.slice(0, 120));
   check('名稱後面有代號', /測試掉零\s*0077/.test(calText) && /測試高息動能\s*T001A/.test(calText));
-  check('持有中卻沒抓到公告的，講出是哪一檔', /沒抓到公告：T009/.test(calText), calText.slice(-80));
+  check('持有中卻沒抓到公告的，講出是哪一檔', /沒抓到配息資料：T009/.test(calText), calText.slice(-80));
 
   check('沒有 JS 錯誤', !errors.length, errors.join('；'));
   await browser.close();

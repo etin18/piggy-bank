@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v34';
+const APP_VERSION = 'v35';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -36,9 +36,10 @@ const LS = {
   privacy: 'pb.privacy',  // 遮金額只存在這台裝置
   ledger: 'pb.ledger',    // 明細頁的期間與篩選
   apiVersion: 'pb.apiVersion',
-  pdfPasswords: 'pb.pdfPasswords',
-  etfDividends: 'pb.etfDividends',
-  reportBlocks: 'pb.reportBlocks',  // 報表頁顯示哪些區塊、怎麼排，只存在這台裝置  // 證交所的 ETF 配息公告快取（公開資料，只存在這台裝置）  // 對帳單 PDF 的密碼，勾了「記住」才存，只在這台裝置
+  pdfPasswords: 'pb.pdfPasswords',  // 對帳單 PDF 的密碼，勾了「記住」才存，只在這台裝置
+  etfDividends: 'pb.etfDividends',  // 證交所的 ETF 配息公告快取（公開資料，只存在這台裝置）
+  fundDividends: 'pb.fundDividends', // 鉅亨網的基金配息紀錄快取（同上）
+  reportBlocks: 'pb.reportBlocks',  // 報表頁顯示哪些區塊、怎麼排，只存在這台裝置
   data: 'pb.',            // pb.instruments、pb.trades …
 };
 
@@ -68,7 +69,7 @@ const DEFAULT_FIELDS = ['avg', 'price', 'rate'];
 const REPORT_BLOCKS = [
   { key: 'div', label: '配息', hint: '全年累積、平均每月' },
   { key: 'chart', label: '每月配息', hint: '長條圖' },
-  { key: 'divcal', label: 'ETF 配息行事曆', hint: '證交所公告' },
+  { key: 'divcal', label: '配息行事曆', hint: 'ETF 與基金' },
   { key: 'balance', label: '帳戶餘額', hint: '' },
   { key: 'pl', label: '投入與損益', hint: '' },
   { key: 'pie', label: '投入佔比', hint: '圓餅' },
@@ -148,8 +149,9 @@ const state = {
   detailFilter: 'all',
   returnToDetail: null,  // 關掉編輯面板後要回到哪一檔的明細
   returnToImport: false, // 從 PDF 匯入清單點進表單的話，關掉之後回清單
-  etfDiv: { fetchedAt: '', byCode: {} },
-  reportBlocks: { order: [], hidden: [] },   // 報表頁：區塊順序與隱藏的區塊   // ETF 配息公告：{ 代號: [{ exDate, recordDate, payDate, perUnit }] }
+  etfDiv: { fetchedAt: '', byCode: {} },   // ETF 配息公告：{ 代號: [{ exDate, recordDate, payDate, perUnit }] }
+  fundDiv: { fetchedAt: '', byNavId: {} }, // 基金配息紀錄：{ 淨值代碼: [{ recordDate, exDate, perUnit }] }
+  reportBlocks: { order: [], hidden: [] },   // 報表頁：區塊順序與隱藏的區塊
   detailScroll: 0,       // 明細列表捲到哪，返回時停回原位
   expanded: new Set(),   // 持股頁展開了哪幾檔
 
@@ -311,6 +313,8 @@ function loadLocal() {
 
     const etfDiv = JSON.parse(localStorage.getItem(LS.etfDividends) || 'null');
     if (etfDiv && typeof etfDiv.byCode === 'object') state.etfDiv = etfDiv;
+    const fundDiv = JSON.parse(localStorage.getItem(LS.fundDividends) || 'null');
+    if (fundDiv && typeof fundDiv.byNavId === 'object') state.fundDiv = fundDiv;
 
     // 明細頁的篩選：只收認得的值，改版後留下的舊 key 直接丟掉
     const ledger = JSON.parse(localStorage.getItem(LS.ledger) || 'null');
@@ -952,7 +956,7 @@ function findMissingDividends() {
     const misses = official.rows
       .filter((r) => r.perUnit > 0 && r.payDate && addDays(r.payDate, OFFICIAL_GRACE_DAYS) <= today)
       .filter((r) => heldAt(position, dayBefore(r.exDate)))
-      .filter((r) => !recordedDividend(position.instrument, r))
+      .filter((r) => !recordedDividend(position.instrument, r, position.type === FUND ? position.style : ''))
       .sort((a, b) => a.exDate.localeCompare(b.exDate));
 
     const older = inferred && inferred.kind === 'gap'
@@ -1331,7 +1335,9 @@ function renderMissing() {
     let meta;
     if (item.kind === 'official') {
       const r = item.row;
-      meta = `${fmtDate(r.exDate)} 除息 · ${fmtDate(r.payDate)} 發放 · 每股 ${fmtNum(r.perUnit, 4)}`
+      meta = p.type === FUND
+        ? `${fmtDate(r.exDate)} 基準 · 約 ${fmtDate(r.payDate)} 發放 · 每單位 ${fmtNum(r.perUnit, 6)}`
+        : `${fmtDate(r.exDate)} 除息 · ${fmtDate(r.payDate)} 發放 · 每股 ${fmtNum(r.perUnit, 4)}`
         + (item.count > 1 ? `，共 ${item.count} 期沒記` : ' 沒記');
     } else if (item.kind === 'never') {
       meta = `${freq} · 買了 ${monthsSince(item.due)} 個月，一次都還沒領過`;
@@ -3634,7 +3640,7 @@ async function refreshEtfPrices() {
   }
 
   // 配息公告一起抓。分開呼叫：後端還沒更新的話，至少現價照樣能用
-  if (etfs.length) refreshEtfDividends({ quiet: true });
+  refreshEtfDividends({ quiet: true });
 }
 
 /** 現價表單裡的單檔抓取 */
@@ -3983,6 +3989,7 @@ const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000)
  * 沒抓過、或上次抓失敗的，回 null —— 那就退回照頻率推算，不要當成「沒有配息」。
  */
 function officialDividends(inst) {
+  if (inst && inst.type === FUND) return fundOfficialDividends(inst);
   if (!inst || inst.type !== ETF) return null;
   const code = etfCode(inst);
   const rows = state.etfDiv.byCode[code];
@@ -3994,14 +4001,83 @@ function officialDividends(inst) {
 }
 
 /**
+ * 基金的配息紀錄，轉成跟 ETF 公告一樣的樣子。三件事跟 ETF 不同：
+ *
+ *   日期：使用者一直把銀行通知上的「基準日」記在「除息日」那一欄，所以這裡也拿基準日當 exDate，
+ *         兩邊才對得起來（真正的除息日通常是隔一個營業日，留在 realExDate）。
+ *   發放日：鉅亨網沒有。照使用者這一檔過去「基準日 → 入帳」隔幾天推，沒紀錄就 6 天，標成推估。
+ *   金額：美國註冊的基金銀行會先扣 30% 預扣稅，通知上的每單位是 0.7 倍。
+ *         拿使用者記過的配息去比，大約是 0.7 倍就乘 0.7。
+ *
+ * 鉅亨網只有配過的、沒有預告。還持有的，照頻率推一期「預計」（金額待公告）放在最後。
+ */
+function fundOfficialDividends(inst) {
+  const navId = String(inst.navId || '').trim();
+  const raw = navId ? state.fundDiv.byNavId[navId] : null;
+  if (!Array.isArray(raw) || !state.fundDiv.fetchedAt) return null;
+
+  const mine = live('dividends').filter((d) => d.instrumentId === inst.id);
+  const lag = fundPayLag(mine);
+  const factor = fundTaxFactor(mine, raw);
+
+  const rows = raw.filter((r) => r.recordDate).map((r) => ({
+    exDate: r.recordDate,
+    realExDate: r.exDate,
+    payDate: addDays(r.recordDate, lag),
+    payEstimated: true,
+    perUnit: r.perUnit > 0 ? Math.round(r.perUnit * factor * 1e6) / 1e6 : r.perUnit,
+  })).sort((a, b) => a.exDate.localeCompare(b.exDate));
+
+  // 下一期：照頻率往後推。過去的日子都差不多（例如每月 14 號前後），推出來也會落在那附近
+  const months = DIVIDEND_GAP[divFrequency(inst, rows)];
+  const last = rows[rows.length - 1];
+  if (months && last) {
+    const next = toYmd(addMonths(last.exDate, months));
+    if (next > todayStr()) {
+      rows.push({ exDate: next, payDate: addDays(next, lag), payEstimated: true, perUnit: null, predicted: true });
+    }
+  }
+
+  const since = rows.length ? rows[0].exDate : todayStr();
+  return { rows, since, taxed: factor < 1 };
+}
+
+/** 這一檔過去「基準日 → 入帳」隔幾天（取中位數）。沒紀錄就 6 天 —— 實際資料裡基金多半 5～7 天 */
+function fundPayLag(mine) {
+  const gaps = mine.filter((d) => d.exDate && d.payDate)
+    .map((d) => daysBetween(d.exDate, d.payDate))
+    .filter((n) => n >= 0 && n <= 30)
+    .sort((a, b) => a - b);
+  return gaps.length ? gaps[Math.floor(gaps.length / 2)] : 6;
+}
+
+/** 使用者記的每單位 ÷ 基金公司公布的每單位，中位數落在 0.7 左右就是要扣 30% 的那種 */
+function fundTaxFactor(mine, raw) {
+  const ratios = [];
+  for (const d of mine) {
+    if (!(Number(d.perUnit) > 0)) continue;
+    const r = raw.find((x) => x.recordDate === d.exDate && x.perUnit > 0);
+    if (r) ratios.push(Number(d.perUnit) / r.perUnit);
+  }
+  if (!ratios.length) return 1;
+  ratios.sort((a, b) => a - b);
+  const mid = ratios[Math.floor(ratios.length / 2)];
+  return mid > 0.62 && mid < 0.78 ? 0.7 : 1;
+}
+
+/**
  * 公告的這一期，使用者記了沒有。
  * 使用者記的發放日常是「錢入帳那天」，會跟公告差個一兩天，所以放寬到一週。
+ * 基金的單筆與定期定額同一天各配一次，要看型態，不然記了一邊會把另一邊也當成記過了。
+ * 基金的發放日是推估的，不拿來比。
  */
-function recordedDividend(inst, row) {
-  return live('dividends').find((d) => d.instrumentId === inst.id && (
-    (d.exDate && Math.abs(daysBetween(d.exDate, row.exDate)) <= 3)
-    || (d.payDate && row.payDate && Math.abs(daysBetween(d.payDate, row.payDate)) <= 7)
-  )) || null;
+function recordedDividend(inst, row, style) {
+  return live('dividends').find((d) => d.instrumentId === inst.id
+    && (!style || normalizeStyle(d.style) === normalizeStyle(style))
+    && (
+      (d.exDate && Math.abs(daysBetween(d.exDate, row.exDate)) <= 3)
+      || (!row.payEstimated && d.payDate && row.payDate && Math.abs(daysBetween(d.payDate, row.payDate)) <= 7)
+    )) || null;
 }
 
 /** 要抓哪幾檔：有代號的 ETF，包括出清的（漏記提醒要對得到出清前那幾期） */
@@ -4011,10 +4087,22 @@ function etfCodesForDividends() {
     .map(etfCode))];
 }
 
+/** 要抓配息的基金：填了淨值代碼的，包括出清的（漏記提醒要對得到出清前那幾期） */
+function fundNavIdsForDividends() {
+  return [...new Set(live('instruments')
+    .filter((i) => i.type === FUND && String(i.navId || '').trim())
+    .map((i) => String(i.navId).trim()))];
+}
+
+/**
+ * ETF 的公告和基金的配息紀錄一起抓，但分開呼叫：
+ * 後端還是舊版（不認得 fundDividends）的話，ETF 至少照樣能更新。
+ */
 async function refreshEtfDividends({ quiet = false } = {}) {
   const codes = etfCodesForDividends();
-  if (!codes.length) {
-    if (!quiet) toast('請先幫 ETF 填代號');
+  const navIds = fundNavIdsForDividends();
+  if (!codes.length && !navIds.length) {
+    if (!quiet) toast('請先幫 ETF 填代號，或幫基金填淨值代碼');
     return;
   }
   if (!state.apiUrl) {
@@ -4024,17 +4112,38 @@ async function refreshEtfDividends({ quiet = false } = {}) {
 
   const btn = $('btn-divcal-refresh');
   btn.disabled = true;
+  const parts = [];
+  const errors = [];
+  let oldBackend = false;
+  const fetchOne = async (action, payload, save, label) => {
+    try {
+      const got = (await apiCall({ action, ...payload })).dividends || {};
+      save(got);
+      parts.push(`${label} ${Object.keys(got).length} 檔`);
+    } catch (err) {
+      if (/未知的操作/.test(err.message || '')) oldBackend = true;
+      else errors.push(err.message || '查詢失敗');
+    }
+  };
+
   try {
-    const data = await apiCall({ action: 'etfDividends', codes });
-    const got = data.dividends || {};
-    // 某一檔這次沒抓到就留著上次的，不要整個清掉
-    state.etfDiv = { fetchedAt: new Date().toISOString(), byCode: { ...state.etfDiv.byCode, ...got } };
-    try { localStorage.setItem(LS.etfDividends, JSON.stringify(state.etfDiv)); } catch (err) { /* 無妨 */ }
-    if (!quiet) toast(`已更新 ${Object.keys(got).length} 檔的配息公告`);
-  } catch (err) {
+    if (codes.length) {
+      await fetchOne('etfDividends', { codes }, (got) => {
+        // 某一檔這次沒抓到就留著上次的，不要整個清掉
+        state.etfDiv = { fetchedAt: new Date().toISOString(), byCode: { ...state.etfDiv.byCode, ...got } };
+        try { localStorage.setItem(LS.etfDividends, JSON.stringify(state.etfDiv)); } catch (err) { /* 無妨 */ }
+      }, 'ETF');
+    }
+    if (navIds.length) {
+      await fetchOne('fundDividends', { navIds }, (got) => {
+        state.fundDiv = { fetchedAt: new Date().toISOString(), byNavId: { ...state.fundDiv.byNavId, ...got } };
+        try { localStorage.setItem(LS.fundDividends, JSON.stringify(state.fundDiv)); } catch (err) { /* 無妨 */ }
+      }, '基金');
+    }
     // 後端還是舊版的話，講清楚要做什麼，不要只丟「未知的操作」
-    const old = /未知的操作/.test(err.message || '');
-    if (old || !quiet) toast(old ? '配息公告要先更新後端：貼上新版 Code.gs 並重新部署' : (err.message || '查詢失敗'));
+    if (oldBackend) toast('配息資料要先更新後端：貼上新版 Code.gs 並重新部署');
+    else if (errors.length && !quiet) toast(errors[0]);
+    else if (!quiet) toast(`已更新配息：${parts.join('、')}`);
   } finally {
     btn.disabled = false;
     render();
@@ -4050,14 +4159,18 @@ function divCalendarEntries() {
   const from = toYmd(addMonths(today, -DIVCAL_LOOKBACK_MONTHS));
   const out = [];
 
-  for (const inst of live('instruments').filter((i) => i.type === ETF)) {
+  for (const inst of live('instruments').filter((i) => i.type === ETF || i.type === FUND)) {
     const official = officialDividends(inst);
     if (!official) continue;
+    // 基金的單筆與定期定額是兩筆各自的投資，配息也分開發，分兩列
+    const styles = inst.type === FUND ? ['小額', '單筆'] : [''];
     for (const row of official.rows) {
       if (row.exDate < from) continue;
-      const units = unitsHeldAt(inst.id, dayBefore(row.exDate));
-      if (units <= EPS) continue;
-      out.push({ inst, row, units, recorded: recordedDividend(inst, row) });
+      for (const style of styles) {
+        const units = unitsHeldAt(inst.id, dayBefore(row.exDate), style || undefined);
+        if (units <= EPS) continue;
+        out.push({ inst, row, units, style, recorded: row.predicted ? null : recordedDividend(inst, row, style) });
+      }
     }
   }
   return out.sort((a, b) => a.row.exDate.localeCompare(b.row.exDate)
@@ -4070,10 +4183,10 @@ let divCalShown = [];
  * 月配、季配、半年配…。標的上填的優先；沒填的話，從公告的除息間隔推：
  * 相鄰兩期的間隔取中位數，1 個月左右是月配、3 個月季配，依此類推。
  */
-function divFrequency(inst) {
+function divFrequency(inst, rows) {
   if (inst.frequency && inst.frequency !== '不配息') return inst.frequency;
-  const official = officialDividends(inst);
-  const dates = official ? official.rows.map((r) => r.exDate).sort() : [];
+  const official = rows ? { rows } : officialDividends(inst);
+  const dates = official ? official.rows.filter((r) => !r.predicted).map((r) => r.exDate).sort() : [];
   if (dates.length < 2) return '';
   const gaps = dates.slice(1).map((d, i) => ymNumber(d) - ymNumber(dates[i])).sort((a, b) => a - b);
   const mid = gaps[Math.floor(gaps.length / 2)];
@@ -4082,64 +4195,88 @@ function divFrequency(inst) {
 
 function renderDivCalendar() {
   const card = $('divcal-card');
-  const hasEtf = etfCodesForDividends().length > 0;
-  card.hidden = !hasEtf;
-  if (!hasEtf) return;
+  const show = etfCodesForDividends().length > 0 || fundNavIdsForDividends().length > 0;
+  card.hidden = !show;
+  if (!show) return;
 
   const today = todayStr();
-  const fetched = state.etfDiv.fetchedAt;
+  const fetched = [state.etfDiv.fetchedAt, state.fundDiv.fetchedAt].filter(Boolean).sort().pop() || '';
   $('divcal-sub').textContent = fetched
-    ? `證交所公告 · 約可領＝每股 × 除息前一天的持有股數 · ${fmtStamp(fetched)} 更新`
-    : '還沒抓過。按「更新」從證交所抓配息公告，按「更新現價」時也會一起抓。';
+    ? `ETF 照證交所公告、基金照鉅亨網 · 約可領＝每單位 × 持有 · ${fmtStamp(fetched)} 更新`
+    : '還沒抓過。按「更新」抓配息資料，按「更新現價」時也會一起抓。';
 
   divCalShown = divCalendarEntries();
 
-  // 持有中、卻沒有這一檔的公告 —— 多半是這次沒抓到，不講的話使用者會以為它這期沒配
+  // 持有中、卻沒有資料 —— 多半是這次沒抓到，不講的話使用者會以為它這期沒配
+  const held = heldPositions();
   const missing = fetched
-    ? heldPositions().filter((p) => p.type === ETF && !officialDividends(p.instrument)).map((p) => etfCode(p.instrument))
+    ? [...new Set(held.filter((p) => (p.type === ETF || String(p.instrument.navId || '').trim())
+        && p.instrument.frequency !== '不配息' && !officialDividends(p.instrument))
+      .map((p) => (p.type === ETF ? etfCode(p.instrument) : p.instrument.name)))]
     : [];
-  const missingNote = missing.length
-    ? `<p class="hint hint--warn">這幾檔沒抓到公告：${escapeHtml(missing.join('、'))}。按「更新」再試一次。</p>`
-    : '';
+  // 沒填淨值代碼的基金查不到，講一聲，免得以為它這期沒配
+  const noId = [...new Set(held.filter((p) => p.type === FUND && !String(p.instrument.navId || '').trim()
+    && p.instrument.frequency !== '不配息').map((p) => p.instrument.name))];
+  const notes = (missing.length ? `<p class="hint hint--warn">這幾檔沒抓到配息資料：${escapeHtml(missing.join('、'))}。按「更新」再試一次。</p>` : '')
+    + (noId.length ? `<p class="hint">${escapeHtml(noId.join('、'))} 沒填淨值代碼，不會出現在這裡。</p>` : '');
 
   if (fetched && !divCalShown.length) {
-    $('divcal-list').innerHTML = '<p class="hint">最近沒有你持有的 ETF 配息。</p>' + missingNote;
+    $('divcal-list').innerHTML = '<p class="hint">最近沒有你持有的配息。</p>' + notes;
     return;
   }
 
   let html = '';
   let markedToday = false;
   divCalShown.forEach((e, i) => {
-    // 「今天」那條線：上面是已經除息的，下面是還沒到的
+    // 「今天」那條線：上面是已經除息（基準日）過的，下面是還沒到的
     if (!markedToday && e.row.exDate > today) {
       html += `<div class="divcal__today"><span>今天 ${fmtDate(today)}</span></div>`;
       markedToday = true;
     }
+    const isFund = e.inst.type === FUND;
     const pending = e.row.perUnit === null || e.row.perUnit === undefined;
     const paid = e.row.payDate && e.row.payDate <= today;
+    // 美元計價的基金，金額要乘匯率才是台幣（用最近一次現價的匯率）
+    const rate = isFund && isUsd(e.inst) ? rateOf(e.inst.id) : 1;
 
     // 記過的只在日期後面小小標一下，不另佔一行 —— 過去幾期大多是記過的，每列多一行會拉得很長
     const done = e.recorded ? ' · <span class="divcal__done">已記 ✓</span>' : '';
-    const act = !e.recorded && !pending && e.row.perUnit > 0 && paid
+    const act = !e.recorded && !pending && e.row.perUnit > 0 && paid && rate > 0
       ? `<button class="divcal__rec" type="button" data-divcal="${i}">記下</button>` : '';
 
-    const amount = pending
-      ? '<strong class="divcal__pending">待公告</strong>'
-      : `<strong>約 ${fmtMoney(e.row.perUnit * e.units)}</strong>`;
-    const per = pending ? '' : `每股 ${fmtNum(e.row.perUnit, 4)} × ${fmtQty(ETF, e.units)}`;
+    let amount = '<strong class="divcal__pending">待公告</strong>';
+    if (!pending) amount = rate > 0 ? `<strong>約 ${fmtMoney(e.row.perUnit * e.units * rate)}</strong>` : '<strong>—</strong>';
+
+    const unit = isFund ? `${fmtNum(e.units, 3)} 單位` : fmtQty(ETF, e.units);
+    const styleText = isFund ? styleLabel(e.style, FUND) : '';
+    let per = styleText;
+    if (!pending) {
+      per = `每單位 ${fmtNum(e.row.perUnit, 6)}${isFund && isUsd(e.inst) ? ' 美元' : ''} × ${unit}${styleText ? ` · ${styleText}` : ''}`;
+    }
+
+    // 基金照使用者的記法寫「基準日」；發放日是推估的，前面加「約」
+    let dates = `除息 ${fmtDate(e.row.exDate)} · 發放 ${fmtDate(e.row.payDate)}`;
+    if (isFund) {
+      dates = e.row.predicted
+        ? `預計基準 ${fmtDate(e.row.exDate)} 前後`
+        : `基準 ${fmtDate(e.row.exDate)} · 發放 約 ${fmtDate(e.row.payDate)}`;
+    }
+
+    const code = isFund ? String(e.inst.code || '') : etfCode(e.inst);
+    const freq = divFrequency(e.inst);
 
     html += `
       <div class="divcal__row ${e.row.exDate <= today ? 'is-past' : ''}">
         <div class="divcal__line">
           <span class="divcal__name">
             <span class="divcal__nm">${escapeHtml(e.inst.name)}</span>
-            <span class="divcal__code">${escapeHtml(etfCode(e.inst))}</span>
-            ${divFrequency(e.inst) ? `<span class="divcal__freq">${divFrequency(e.inst)}</span>` : ''}
+            ${code ? `<span class="divcal__code">${escapeHtml(code)}</span>` : ''}
+            ${freq ? `<span class="divcal__freq">${freq}</span>` : ''}
           </span>
           <span class="divcal__amt">${amount}</span>
         </div>
         <div class="divcal__line">
-          <span class="divcal__dates">除息 ${fmtDate(e.row.exDate)} · 發放 ${fmtDate(e.row.payDate)}${done}</span>
+          <span class="divcal__dates">${dates}${done}</span>
           <span class="divcal__per">${escapeHtml(per)}</span>
         </div>
         ${act ? `<span class="divcal__act">${act}</span>` : ''}
@@ -4148,26 +4285,31 @@ function renderDivCalendar() {
   if (!markedToday && divCalShown.length) {
     html += `<div class="divcal__today"><span>今天 ${fmtDate(today)}</span></div>`;
   }
-  $('divcal-list').innerHTML = html + missingNote;
+  $('divcal-list').innerHTML = html + notes;
 }
 
 /**
  * 從公告記一筆配息：日期、每股、持有股數照公告與紀錄填好。
  * 實領先填「每股 × 股數」，實際入帳常被扣掉 10 元匯費或補充保費，使用者照存摺改。
  */
-function recordOfficialDividend(inst, row) {
-  const units = unitsHeldAt(inst.id, dayBefore(row.exDate));
+function recordOfficialDividend(inst, row, style = '') {
+  const isFund = inst.type === FUND;
+  const units = unitsHeldAt(inst.id, dayBefore(row.exDate), isFund ? style : undefined);
+  // 美元計價的基金，實領先用最近一次現價的匯率估
+  const rate = isFund && isUsd(inst) ? (rateOf(inst.id) || 1) : 1;
   openDividendSheet({
-    category: ETF,
+    category: inst.type,
     prefill: {
       fromImport: true,
       instrumentId: inst.id,
+      style: isFund ? style : '',
       exDate: row.exDate,
       payDate: row.payDate,
       perUnit: row.perUnit,
       units,
-      received: Math.round(row.perUnit * units),
-      note: '',
+      received: Math.round(row.perUnit * units * rate),
+      // 基金的發放日和匯率是推估的，提醒照存摺改
+      note: isFund ? '發放日與匯率為推估，請照入帳改' : '',
     },
   });
 }
@@ -4682,7 +4824,7 @@ function bindEvents() {
 
     // 有官方公告的那期：除息日、發放日、每股、股數全部照公告填好
     const item = missingShown[Number(btn.dataset.missingIndex)];
-    if (item && item.kind === 'official') return recordOfficialDividend(inst, item.row);
+    if (item && item.kind === 'official') return recordOfficialDividend(inst, item.row, item.position.style || '');
 
     openDividendSheet({
       category: inst.type,
@@ -4779,7 +4921,7 @@ function bindEvents() {
     const btn = e.target.closest('[data-divcal]');
     if (!btn) return;
     const entry = divCalShown[Number(btn.dataset.divcal)];
-    if (entry) recordOfficialDividend(entry.inst, entry.row);
+    if (entry) recordOfficialDividend(entry.inst, entry.row, entry.style);
   });
 
   // ---- 從對帳單 PDF 匯入 ----
