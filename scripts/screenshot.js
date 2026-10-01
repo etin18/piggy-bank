@@ -1231,7 +1231,7 @@ async function run() {
   await page.waitForTimeout(400);
 
   const barVisible = await page.locator('#btn-refresh-prices').isVisible();
-  console.log(`  ${barVisible ? '✅' : '❌'} 持股頁出現「更新 ETF 現價」按鈕`);
+  console.log(`  ${barVisible ? '✅' : '❌'} 持股頁出現「更新現價」按鈕`);
   if (!barVisible) problems.push('持股頁沒有出現更新現價按鈕');
 
   await page.locator('#btn-refresh-prices').click();

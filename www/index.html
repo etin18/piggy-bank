@@ -318,7 +318,7 @@
             <path d="M20 12a8 8 0 11-2.6-5.9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             <path d="M20 4v4.5h-4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <span id="quote-btn-text">更新 ETF 現價</span>
+          <span id="quote-btn-text">更新現價</span>
         </button>
         <span class="quote-bar__hint" id="quote-hint"></span>
         <button class="icon-btn icon-btn--tool" id="btn-fields" type="button" aria-label="選擇要顯示的資訊">
@@ -780,6 +780,14 @@
       <input class="input" id="i-code" type="text" maxlength="20" autocomplete="off"
              autocapitalize="characters" placeholder="0056">
       <span class="field__hint">基金沒有代號可以留空</span>
+    </label>
+
+    <!-- 基金才有：鉅亨網的代碼，填了「更新現價」就會一起抓淨值 -->
+    <label class="field" id="i-navid-field" hidden>
+      <span class="field__label">淨值代碼<span class="field__opt">選填</span></span>
+      <input class="input" id="i-navid" type="text" maxlength="20" autocomplete="off"
+             autocapitalize="characters" placeholder="B16,009">
+      <span class="field__hint">填了就能自動抓淨值。在鉅亨網打開這檔基金，網址最後那段就是（例如 B16,009）</span>
     </label>
 
     <label class="field">

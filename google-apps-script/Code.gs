@@ -35,7 +35,7 @@ var SECRET = '';   // ← 改成你自己的通關密語，例如 'piggy2026kk'
  * 用來確認這份程式有沒有真的重新部署上去 ——
  * 貼了新程式卻忘了「部署 → 管理部署作業 → 新版本」的話，跑的還是舊的。
  */
-var API_VERSION = 'v19';
+var API_VERSION = 'v20';
 
 /* ==========================================================================
    資料表定義
@@ -62,7 +62,10 @@ var SHEETS = {
       { key: 'frequency', header: '配息頻率', type: 'text' },
       { key: 'status',    header: '狀態',     type: 'text' },
       { key: 'note',      header: '備註',     type: 'text',   width: 200 },
-      { key: 'createdAt', header: '建立時間', type: 'text' }
+      { key: 'createdAt', header: '建立時間', type: 'text' },
+      // 基金在鉅亨網的代碼（例如 B16,009），用來自動抓淨值。
+      // 銀行的基金代碼（例如 0123）是銀行自己編的，外面查不到，所以要另外對一次
+      { key: 'navId',     header: '淨值代碼', type: 'text',   plain: true }
     ]
   },
 
@@ -194,6 +197,8 @@ function route(payload) {
         return { ok: true, quotes: fetchQuotes(payload.codes || []) };
       case 'etfDividends':
         return { ok: true, dividends: fetchEtfDividends(payload.codes || []) };
+      case 'fundNavs':
+        return { ok: true, navs: fetchFundNavs(payload.navIds || []), usdTwd: fetchUsdTwd() };
       default:
         return { ok: false, error: '未知的操作：' + action };
     }
@@ -250,7 +255,7 @@ function getSheet(entity) {
 /**
  * 日期欄和代號欄都要設成純文字：
  *   日期 —— 否則 Sheets 會把 2026-09-08 轉成本地日期格式，讀回來就不是原本的樣子
- *   代號 —— 否則 0809 會被當成數字存成 809，前面的 0 就沒了（0056 也一樣）
+ *   代號 —— 否則 0123 會被當成數字存成 123，前面的 0 就沒了（0056 也一樣）
  *
  * 格式要先設好再寫值。值一旦被存成數字，之後再改格式也救不回前面的 0。
  */
@@ -683,6 +688,77 @@ function fetchEtfDividends(codes) {
 function rocToIso(text) {
   var m = /(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/.exec(String(text || ''));
   return m ? (Number(m[1]) + 1911) + '-' + pad2(Number(m[2])) + '-' + pad2(Number(m[3])) : '';
+}
+
+/* ==========================================================================
+   基金淨值
+
+   證交所只管上市的 ETF，境外基金和投信基金的淨值不在那裡，也沒有官方的公開 API。
+   這裡用鉅亨網（fund.cnyes.com）網站自己在用的資料：沒有公開文件，
+   哪天它改版就可能抓不到 —— 所以 App 的手動輸入一直留著當備案。
+
+   回傳 { 淨值代碼: { nav, date, currency, name } }，抓不到的不放進結果。
+   date 是那個淨值是哪一天的（境外基金通常晚一兩天公布），不是抓取時間。
+
+   美元計價的基金要乘匯率才是台幣市值。匯率用 open.er-api.com（公開、每天更新一次）。
+   台灣銀行的牌告會擋程式抓取，不能用。用來估市值夠準，跟銀行的參考匯率會差一點點。
+   ========================================================================== */
+
+function fetchFundNavs(navIds) {
+  var wanted = [];
+  for (var i = 0; i < navIds.length; i++) {
+    var id = String(navIds[i] || '').trim();
+    if (id && wanted.indexOf(id) === -1) wanted.push(id);
+  }
+  if (!wanted.length) return {};
+
+  var requests = wanted.map(function (id) {
+    return {
+      url: 'https://fund.api.cnyes.com/fund/api/v1/funds/' + encodeURIComponent(id),
+      muteHttpExceptions: true,
+      followRedirects: true
+    };
+  });
+
+  var result = {};
+  var responses = [];
+  try {
+    responses = UrlFetchApp.fetchAll(requests);
+  } catch (err) {
+    return result;
+  }
+
+  for (var j = 0; j < wanted.length; j++) {
+    try {
+      var res = responses[j];
+      if (!res || res.getResponseCode() !== 200) continue;
+      var item = (JSON.parse(res.getContentText()) || {}).items || {};
+      var nav = Number(item.nav);
+      if (!(nav > 0) || !item.priceDate) continue;
+      result[wanted[j]] = {
+        nav: nav,
+        date: Utilities.formatDate(new Date(Number(item.priceDate) * 1000), 'Asia/Taipei', 'yyyy-MM-dd'),
+        currency: String(item.classCurrency || ''),
+        name: String(item.displayNameLocal || item.displayName || '')
+      };
+    } catch (err) {
+      // 這一檔壞了不影響其他檔
+    }
+  }
+  return result;
+}
+
+/** 1 美元換多少台幣。抓不到回 0，App 會沿用上次的匯率 */
+function fetchUsdTwd() {
+  try {
+    var res = UrlFetchApp.fetch('https://open.er-api.com/v6/latest/USD', { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return 0;
+    var data = JSON.parse(res.getContentText());
+    var rate = Number(data && data.rates && data.rates.TWD);
+    return rate > 0 ? Math.round(rate * 1000) / 1000 : 0;
+  } catch (err) {
+    return 0;
+  }
 }
 
 /* ==========================================================================

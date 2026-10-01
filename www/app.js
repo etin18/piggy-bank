@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v33';
+const APP_VERSION = 'v34';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -1955,11 +1955,11 @@ function renderHoldings() {
       + '多半是標的在試算表被刪掉了 —— 把標的加回來，或把那幾筆紀錄刪掉。';
   }
 
-  // 有 ETF 才顯示「更新現價」—— 基金沒有公開報價可抓。
+  // 有 ETF、或有填了淨值代碼的基金，才顯示「更新現價」。
   // 顯示設定那顆按鈕只要有持股就在
   const etfs = held.filter((p) => p.type === ETF);
   $('hold-tools').hidden = held.length === 0;
-  $('btn-refresh-prices').hidden = etfs.length === 0;
+  $('btn-refresh-prices').hidden = etfs.length === 0 && navFunds().length === 0;
 
   const stamps = etfs
     .map((p) => priceRow(p.instrument.id))
@@ -1968,7 +1968,7 @@ function renderHoldings() {
     .sort();
   $('quote-hint').textContent = stamps.length
     ? `上次更新 ${fmtStamp(stamps[stamps.length - 1])}`
-    : '從證交所抓，盤後是當日收盤';
+    : (etfs.length ? '從證交所抓，盤後是當日收盤' : '基金淨值來自鉅亨網');
 
   // 同一檔基金的單筆與定期定額要並在同一張卡片裡，所以先照標的收攏
   const cards = [];
@@ -2014,7 +2014,7 @@ function plHtml(amount, base, { cls = 'hold__pl' } = {}) {
  *
  * 收合時只有「名字 ＋ 賺賠多少」，一個畫面掃得完；
  * 展開後把損益拆成「價格漲跌 ＋ 配息」，
- * 不然像 0826 那種「價格在跌、配息補回來還有賺」的狀況，
+ * 不然像高配息基金常見的「價格在跌、配息補回來還有賺」的狀況，
  * 兩個顏色相反的數字並排會看不懂到底是賺是賠。
  */
 function holdingHtml(card, totalValue = 0) {
@@ -3335,6 +3335,7 @@ function openInstrumentSheet({ type, record = null, returnTo = null }) {
 
   $('i-code').value = record ? (record.code || '') : '';
   $('i-name').value = record ? (record.name || '') : '';
+  $('i-navid').value = record ? (record.navId || '') : '';
 
   syncCurrencyField();
   openSheet('instrument-sheet');
@@ -3342,7 +3343,9 @@ function openInstrumentSheet({ type, record = null, returnTo = null }) {
 
 /** 台股 ETF 一定是台幣，只有基金要問計價幣別 */
 function syncCurrencyField() {
-  $('i-currency-field').hidden = chipValue('i-type-chips', 'type') !== FUND;
+  const isFund = chipValue('i-type-chips', 'type') === FUND;
+  $('i-currency-field').hidden = !isFund;
+  $('i-navid-field').hidden = !isFund;
 }
 
 function submitInstrument() {
@@ -3350,7 +3353,10 @@ function submitInstrument() {
   if (!name) return showError('instrument-error', '請填名稱');
 
   const type = chipValue('i-type-chips', 'type') || ETF;
+  // 表單上沒有的欄位（備註、建立時間）要沿用原本的，不然編輯一次就被清掉
+  const before = state.editing ? instrumentById(state.editing.id) || {} : {};
   const record = {
+    ...before,
     id: state.editing ? state.editing.id : uuid(),
     code: $('i-code').value.trim(),
     name,
@@ -3359,8 +3365,12 @@ function submitInstrument() {
     currency: type === FUND ? (chipValue('i-currency-chips', 'currency') || 'TWD') : 'TWD',
     frequency: chipValue('i-freq-chips', 'freq') || '',
     status: state.editing ? (chipValue('i-status-chips', 'status') || '持有中') : '持有中',
-    note: '',
+    note: before.note || '',
+    // 鉅亨網的代碼大小寫有差（有些是 A1xYzQ 這種），不轉大小寫，只去空白
+    navId: type === FUND ? $('i-navid').value.replace(/\s/g, '') : '',
   };
+  delete record._synced;
+  delete record._op;
 
   const returnTo = state.draft.returnTo;
   upsert('instruments', record);
@@ -3422,8 +3432,8 @@ function openPriceSheet(instrumentId) {
   $('p-rate-field').hidden = !usd;
   $('p-rate').value = row && row.rate ? fmtNum(row.rate, 4) : '';
 
-  // 只有填了代號的 ETF 抓得到報價
-  $('btn-fetch-price').hidden = !(isETF && String(inst.code || '').trim());
+  // 填了代號的 ETF、填了淨值代碼的基金才抓得到
+  $('btn-fetch-price').hidden = !(isETF ? etfCode(inst) : String(inst.navId || '').trim());
   $('p-hint').classList.remove('is-calc');
 
   updatePricePreview();
@@ -3511,12 +3521,65 @@ function quotableEtfs() {
     .map((p) => p.instrument);
 }
 
-async function refreshEtfPrices() {
-  const all = quotableEtfs();
-  const targets = all.filter((i) => String(i.code || '').trim());
+/** 持有中、而且填了淨值代碼的基金。同一檔的單筆與定期定額共用一個淨值，所以照標的去重 */
+function navFunds() {
+  const seen = new Set();
+  return heldPositions()
+    .filter((p) => p.type === FUND && String(p.instrument.navId || '').trim())
+    .map((p) => p.instrument)
+    .filter((i) => !seen.has(i.id) && seen.add(i.id));
+}
 
-  if (!targets.length) {
-    toast(all.length ? '請先幫 ETF 填代號' : '沒有持有中的 ETF');
+/** 經由後端抓基金淨值與美元匯率。後端還是舊版時丟出 oldBackend，讓上層講清楚要重新部署 */
+async function fetchFundNavs(navIds) {
+  if (!state.apiUrl) throw new Error('請先到設定連線試算表');
+  if (!navigator.onLine) throw new Error('目前離線，連不到報價');
+  try {
+    return await apiCall({ action: 'fundNavs', navIds });
+  } catch (err) {
+    if (/未知的操作/.test(err.message || '')) err.oldBackend = true;
+    throw err;
+  }
+}
+
+/**
+ * 基金的淨值寫進現價。日期記「那個淨值是哪一天的」而不是抓取時間 ——
+ * 境外基金晚一兩天才公布，卡片上看到「淨值 · 9/30」才知道是哪天的。
+ * 美元計價的乘當天匯率；這次沒抓到匯率就沿用上次的。
+ * 鉅亨網回報的幣別跟標的設定不同時不寫，免得把美元淨值當台幣算。
+ */
+function applyFundNavs(funds, data) {
+  const navs = data.navs || {};
+  const usdTwd = Number(data.usdTwd) || 0;
+  const done = [];
+  const failed = [];
+  for (const inst of funds) {
+    const got = navs[String(inst.navId).trim()];
+    const want = isUsd(inst) ? 'USD' : 'TWD';
+    if (!got || !(got.nav > 0) || (got.currency && got.currency !== want)) {
+      failed.push(inst.name);
+      continue;
+    }
+    const rate = want === 'USD' ? (usdTwd || rateOf(inst.id)) : 1;
+    if (!(rate > 0)) { failed.push(inst.name); continue; }
+    upsert('prices', {
+      id: inst.id,
+      code: inst.code,
+      price: got.nav,
+      rate,
+      updatedAt: `${got.date}T12:00:00+08:00`,
+    }, { flush: false });
+    done.push(inst.name);
+  }
+  return { done, failed };
+}
+
+async function refreshEtfPrices() {
+  const etfs = quotableEtfs().filter((i) => etfCode(i));
+  const funds = navFunds();
+
+  if (!etfs.length && !funds.length) {
+    toast(quotableEtfs().length ? '請先幫 ETF 填代號' : '沒有可以自動更新的標的');
     return;
   }
 
@@ -3524,57 +3587,62 @@ async function refreshEtfPrices() {
   btn.disabled = true;
   $('quote-btn-text').textContent = '查詢中…';
 
+  const parts = [];
+  const failed = [];
   try {
-    const quotes = await fetchQuotes(targets.map(etfCode));
-
-    const failed = [];
-    let updated = 0;
-    let source = '';
-    let time = '';
-
-    for (const inst of targets) {
-      const quote = quotes[etfCode(inst)];
-      if (!quote || !quote.price) {
-        failed.push(inst.code);
-        continue;
+    if (etfs.length) {
+      const quotes = await fetchQuotes(etfs.map(etfCode));
+      let updated = 0;
+      for (const inst of etfs) {
+        const quote = quotes[etfCode(inst)];
+        if (!quote || !quote.price) {
+          failed.push(etfCode(inst));
+          continue;
+        }
+        upsert('prices', {
+          id: inst.id,
+          code: inst.code,
+          price: quote.price,
+          rate: 1,          // 台股一律台幣
+          updatedAt: new Date().toISOString(),
+        }, { flush: false });
+        updated++;
       }
-      upsert('prices', {
-        id: inst.id,
-        code: inst.code,
-        price: quote.price,
-        rate: 1,          // 台股一律台幣
-        updatedAt: new Date().toISOString(),
-      }, { flush: false });
-      updated++;
-      source = source || quote.source || '';
-      time = time || quote.time || '';
+      if (updated) parts.push(`ETF ${updated} 檔`);
+    }
+
+    // 基金分開抓：後端還沒更新的話，ETF 至少照樣能用
+    if (funds.length) {
+      try {
+        const res = applyFundNavs(funds, await fetchFundNavs(funds.map((i) => i.navId)));
+        if (res.done.length) parts.push(`基金 ${res.done.length} 檔`);
+        failed.push(...res.failed);
+      } catch (err) {
+        failed.push(err.oldBackend ? '基金（要先重新部署 Code.gs）' : `基金（${err.message || '查詢失敗'}）`);
+      }
     }
 
     flushChanges();
-
-    if (!updated) {
-      toast(`查不到報價：${failed.join('、')}`);
-    } else if (failed.length) {
-      toast(`更新 ${updated} 檔，查不到 ${failed.join('、')}`);
-    } else {
-      toast(`已更新 ${updated} 檔 · ${source}${time ? ` ${time}` : ''}`);
-    }
+    if (!parts.length) toast(`查不到：${failed.join('、')}`);
+    else toast(`已更新 ${parts.join('、')}${failed.length ? `，查不到 ${failed.join('、')}` : ''}`);
   } catch (err) {
     toast(err.message || '查詢失敗');
   } finally {
     btn.disabled = false;
-    $('quote-btn-text').textContent = '更新 ETF 現價';
+    $('quote-btn-text').textContent = '更新現價';
     renderHoldings();
   }
 
   // 配息公告一起抓。分開呼叫：後端還沒更新的話，至少現價照樣能用
-  refreshEtfDividends({ quiet: true });
+  if (etfs.length) refreshEtfDividends({ quiet: true });
 }
 
 /** 現價表單裡的單檔抓取 */
 async function fetchOnePrice() {
   const inst = instrumentById(state.draft.priceId);
   if (!inst) return;
+
+  if (inst.type === FUND) return fetchOneFundNav(inst);
 
   const code = etfCode(inst);
   if (!code) return showError('price-error', '這檔沒有填代號，請手動輸入價格');
@@ -3596,6 +3664,29 @@ async function fetchOnePrice() {
     $('p-hint').classList.add('is-calc');
   } catch (err) {
     showError('price-error', err.message || '查詢失敗');
+  } finally {
+    btn.disabled = false;
+    $('fetch-price-text').textContent = '自動抓取';
+  }
+}
+
+/** 現價表單裡的單檔抓取（基金）：填淨值和匯率，使用者按儲存才寫入 */
+async function fetchOneFundNav(inst) {
+  const btn = $('btn-fetch-price');
+  btn.disabled = true;
+  $('fetch-price-text').textContent = '查詢中…';
+  showError('price-error', '');
+  try {
+    const data = await fetchFundNavs([inst.navId]);
+    const got = (data.navs || {})[String(inst.navId).trim()];
+    if (!got) return showError('price-error', `鉅亨網查不到 ${inst.navId}，請手動輸入`);
+    $('p-price').value = fmtNum(got.nav, 4);
+    if (isUsd(inst) && Number(data.usdTwd) > 0) $('p-rate').value = fmtNum(data.usdTwd, 4);
+    $('p-hint').textContent = `鉅亨網 · ${fmtDate(got.date)} 的淨值`;
+    $('p-hint').classList.add('is-calc');
+    updatePricePreview();
+  } catch (err) {
+    showError('price-error', err.oldBackend ? '要先重新部署 Code.gs（後端 v20）才抓得到基金淨值' : (err.message || '查詢失敗'));
   } finally {
     btn.disabled = false;
     $('fetch-price-text').textContent = '自動抓取';
@@ -3999,7 +4090,7 @@ function renderDivCalendar() {
   const fetched = state.etfDiv.fetchedAt;
   $('divcal-sub').textContent = fetched
     ? `證交所公告 · 約可領＝每股 × 除息前一天的持有股數 · ${fmtStamp(fetched)} 更新`
-    : '還沒抓過。按「更新」從證交所抓配息公告，更新 ETF 現價時也會一起抓。';
+    : '還沒抓過。按「更新」從證交所抓配息公告，按「更新現價」時也會一起抓。';
 
   divCalShown = divCalendarEntries();
 
