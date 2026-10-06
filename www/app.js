@@ -14,7 +14,7 @@
 /* ---------- 常數 ---------- */
 
 /** 改動 www/ 的內容時跟 sw.js 的 VERSION 一起加號，設定頁看得到，用來確認手機拿到的是不是新版 */
-const APP_VERSION = 'v35';
+const APP_VERSION = 'v36';
 
 /**
  * 後端最後一次「真的需要重新部署」的版本。
@@ -3508,7 +3508,7 @@ async function fetchQuotes(codes) {
 /**
  * 拿去證交所查的代號。
  *
- * 試算表曾經把代號當數字存，前面的 0 會被吃掉：00929 變 929、0056 變 56。
+ * 試算表曾經把代號當數字存，前面的 0 會被吃掉：00900 變 900、0056 變 56。
  * 本機記得完整代號的裝置看起來正常，但換一台裝置從試算表重新帶資料，拿到的就是 929，
  * 現價和配息都查不到，而且不會報錯。台股 ETF 的代號一定是「00」開頭，所以沒有的就補上。
  */
@@ -4528,30 +4528,49 @@ function brokerItems(items) {
     const its = items.filter((i) => i.page === page);
     const kindHead = its.find((i) => i.s === '類別');
     if (!kindHead) continue;
+    const stockHead = its.find((i) => i.s === '股票' && nearY(i.y, kindHead.y, 6));
 
-    // 表頭是「類別」那一帶上下幾行；每一列從「現買／現賣」開始
-    const header = its.filter((i) => Math.abs(i.y - kindHead.y) <= 8 && i.x > kindHead.x + 5);
+    // 表頭是「類別」那一帶上下幾行。範圍要夠寬：有的月份「應收付金額」會折成
+    // 「應收／付／金額」三行，上下各離「類別」十幾點
+    const header = its.filter((i) => Math.abs(i.y - kindHead.y) <= 14 && i.x > kindHead.x + 5);
+    // 每一列從「現買／現賣」開始
     const anchors = its
       .filter((i) => /[買賣]$/.test(i.s) && i.s.length <= 4 && Math.abs(i.x - kindHead.x) < 8 && i.y < kindHead.y)
       .sort((a, b) => b.y - a.y);
 
     const summary = its
-      .filter((i) => /^[0-9A-Z]{4,6}\s*\(.+\)$/.test(i.s))
-      .sort((a, b) => b.y - a.y);
+      .map((i) => ({ i, m: /^([0-9A-Z]{4,6})\s*\((.+)\)$/.exec(i.s) }))
+      .filter((x) => x.m)
+      .sort((a, b) => b.i.y - a.i.y)
+      .map((x) => ({ code: x.m[1], name: x.m[2].replace(/\s/g, '') }));
+
+    // 主表格的股票名稱被截斷又折成上下兩三行（前半在上、後半在下），在「股票」欄那一帶接起來
+    const nameOf = (a) => (stockHead ? its
+      .filter((i) => i !== a && Math.abs(i.y - a.y) <= 9 && Math.abs(i.x - stockHead.x) <= 16 && !/^[\d,.\-]+$/.test(i.s))
+      .sort((x, y) => y.y - x.y)
+      .map((i) => i.s)
+      .join('')
+      .replace(/\s/g, '') : '');
 
     anchors.forEach((a, j) => {
       const r = mapRow(header, its.filter((i) => nearY(i.y, a.y, 2) && i.x > a.x + 5), a.y);
-      const sum = summary[j];
-      const m = sum ? /^([0-9A-Z]{4,6})\s*\((.+)\)$/.exec(sum.s) : null;
+
+      // 主表格配彙總表：照名稱配，不照順序 —— 同一檔分好幾次成交時，
+      // 主表格每次一列，彙總表卻只合併成一列，照順序配的話第二列就配不到代號
+      const name = nameOf(a);
+      const sum = (name && summary.find((x) => x.name === name || x.name.startsWith(name) || name.startsWith(x.name)))
+        || (summary.length === anchors.length ? summary[j] : null)
+        || (summary.length === 1 ? summary[0] : null);
+
       const isSell = /賣/.test(a.s);
       const amount = parseNum(firstOf(r, '價金'));
       const fee = parseNum(firstOf(r, '手續費'));
       const tax = parseNum(firstOf(r, '交易稅'));
-      const net = Math.abs(parseNum(firstOf(r, '應收付')));
+      const net = Math.abs(parseNum(firstOf(r, '應收付') || firstOf(r, '付') || firstOf(r, '應收') || firstOf(r, '金額')));
 
       out.push({
         kind: 'trade', category: ETF, action: isSell ? SELL : BUY,
-        code: m ? m[1] : '', name: m ? m[2] : '',
+        code: sum ? sum.code : '', name: sum ? sum.name : name,
         date, style: '',
         qty: parseNum(firstOf(r, '數量')),
         price: parseNum(firstOf(r, '成交價')),

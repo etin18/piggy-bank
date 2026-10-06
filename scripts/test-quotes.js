@@ -12,7 +12,7 @@ const https = require('https');
 
 const CODES = process.argv.slice(2).length
   ? process.argv.slice(2)
-  : ['0056', '00919', '006208', '00929', '00687B'];
+  : ['0056', '00919', '00878', '00713', '00687B'];
 
 function get(url, headers = {}) {
   return new Promise((resolve, reject) => {
